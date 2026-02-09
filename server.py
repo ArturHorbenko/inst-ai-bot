@@ -1,11 +1,9 @@
-import os
 import tempfile
 import shutil
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from enum import Enum
 import uuid
 import asyncio
@@ -38,6 +36,30 @@ db_connection = DatabaseConnection(config)
 job_manager = None
 results_manager = None
 
+
+def finalize_job_if_complete(job_id: str):
+    """
+    Mark job as completed only when all requested analyses have stored results.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        return
+
+    # Never override terminal failure.
+    if job.get("status") == "failed":
+        return
+
+    requested = set(job.get("analyses", []))
+    if not requested:
+        job_manager.update_job_status(job_id, "completed")
+        return
+
+    stored_results = results_manager.get_results(job_id)
+    finished = {result.get("analysis_type") for result in stored_results if result.get("analysis_type")}
+
+    if requested.issubset(finished):
+        job_manager.update_job_status(job_id, "completed")
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize database connection on startup"""
@@ -61,10 +83,6 @@ class AnalysisType(str, Enum):
     MULTIMODAL = "multimodal"
     STRUCTURED = "structured"
 
-class AnalysisRequest(BaseModel):
-    analyses: List[AnalysisType] = Field(default=[AnalysisType.MULTIMODAL])
-    config: Optional[Dict[str, Any]] = Field(default=None)
-
 class AnalysisResponse(BaseModel):
     job_id: str
     status: str
@@ -77,17 +95,10 @@ class AnalysisResponse(BaseModel):
     indexing_status: Optional[str] = None
     indexing_progress: Optional[float] = None
 
-# Initialize database connection and managers
-config = get_config()
-db_connection = DatabaseConnection(config)
-job_manager = None
-results_manager = None
-
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_video(
     video: UploadFile = File(..., description="Video file to analyze"),
-    analyses: str = Form(..., description="Comma-separated list of analysis types"),
-    user_config: Optional[str] = Form(None, description="JSON config string")
+    analyses: str = Form(..., description="Comma-separated list of analysis types")
 ):
     """
     Analyze uploaded video file with specified analysis types
@@ -135,11 +146,14 @@ async def analyze_video(
                 shutil.rmtree(temp_dir)
             raise HTTPException(status_code=500, detail="Failed to create job - database error")
         
-        # Start async processing
-        asyncio.create_task(process_video_analysis(job_id))
-        
-        # If multimodal analysis is requested, start TwelveLabs upload in background
-        if "multimodal" in [a.value for a in analysis_list]:
+        analysis_values = [a.value for a in analysis_list]
+
+        # Start internal analyses (non-multimodal) in background.
+        if any(analysis != "multimodal" for analysis in analysis_values):
+            asyncio.create_task(process_video_analysis(job_id))
+
+        # If multimodal analysis is requested, start TwelveLabs upload in background.
+        if "multimodal" in analysis_values:
             asyncio.create_task(process_twelvelabs_upload(job_id))
         
         return AnalysisResponse(
@@ -207,6 +221,11 @@ async def process_video_analysis(job_id: str):
             analysis_types = job["analyses"]
         else:
             analysis_types = [analysis.value for analysis in job["analyses"]]
+
+        # Multimodal analysis is handled by process_twelvelabs_upload.
+        analysis_types = [analysis for analysis in analysis_types if analysis != "multimodal"]
+        if not analysis_types:
+            return
         
         # Add job_id to job_manager for tracking
         job_manager.current_job_id = job_id
@@ -222,11 +241,18 @@ async def process_video_analysis(job_id: str):
             job_manager  # Pass job_manager for database updates
         )
         
-        # Update job with results
-        job_manager.update_job_status(job_id, "completed")
         # Store results separately for each analysis type
         for analysis_type, result_data in results.items():
             results_manager.store_results(job_id, analysis_type, result_data, 0.0)  # TODO: track actual processing time
+
+            # Any analysis-level error fails the whole job.
+            status = result_data.get("status") if isinstance(result_data, dict) else None
+            error = result_data.get("error", "Analysis failed") if isinstance(result_data, dict) else "Analysis failed"
+            if status in {"error", "failed"}:
+                job_manager.update_job_status(job_id, "failed", error)
+                return
+
+        finalize_job_if_complete(job_id)
         
     except Exception as e:
         error_msg = str(e)
@@ -275,6 +301,7 @@ async def process_twelvelabs_upload(job_id: str):
                 "video_id": existing_video_id,
                 "reused_existing_upload": True
             }, 0.0)
+            finalize_job_if_complete(job_id)
             
         else:
             # Continue with the upload process
@@ -297,6 +324,7 @@ async def process_twelvelabs_upload(job_id: str):
             # Store final results
             if result.get("status") == "completed":
                 results_manager.store_results(job_id, "multimodal", result, 0.0)
+                finalize_job_if_complete(job_id)
             else:
                 # Update job status to failed if upload failed
                 job_manager.update_job_status(job_id, "failed", result.get("error"))

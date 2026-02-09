@@ -36,6 +36,7 @@ class ResultDocument(BaseModel):
     results: Dict[str, Any]
     processing_time: float
     created_at: datetime
+    updated_at: Optional[datetime] = None
 
 class DatabaseConnection:
     def __init__(self, config):
@@ -79,6 +80,7 @@ class DatabaseConnection:
         # Results collection indexes  
         results_col.create_index("job_id")
         results_col.create_index("analysis_type")
+        results_col.create_index([("job_id", 1), ("analysis_type", 1)], unique=True)
         
     @property
     def db(self):
@@ -242,15 +244,23 @@ class ResultsManager:
     def store_results(self, job_id: str, analysis_type: str, results: Dict[str, Any], processing_time: float) -> bool:
         """Store analysis results"""
         try:
+            now = datetime.utcnow()
             result_doc = ResultDocument(
                 job_id=job_id,
                 analysis_type=analysis_type,
                 results=results,
                 processing_time=processing_time,
-                created_at=datetime.utcnow()
+                created_at=now,
+                updated_at=now
             )
-            
-            self.db.results_collection.insert_one(result_doc.dict())
+
+            payload = result_doc.dict()
+            created_at = payload.pop("created_at")
+            self.db.results_collection.update_one(
+                {"job_id": job_id, "analysis_type": analysis_type},
+                {"$set": payload, "$setOnInsert": {"created_at": created_at}},
+                upsert=True
+            )
             logger.info(f"Stored results for job {job_id}, analysis: {analysis_type}")
             return True
         except Exception as e:
