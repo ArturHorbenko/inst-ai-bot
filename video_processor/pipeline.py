@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-from .analysis import analyze_multimodal, analyze_structured
+from .config import get_config
 
 
 def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id: str = None, job_manager=None) -> Dict[str, Any]:
@@ -16,13 +16,24 @@ def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id
         Dict containing results from all requested analyses
     """
     results = {}
+    config = get_config()
     
     for analysis_type in analysis_types:
         if analysis_type == "multimodal":
-            # Now supports both cases: with or without video_id
-            results[analysis_type] = analyze_multimodal(video_path, twelvelabs_video_id, job_manager)
+            if not config.ENABLE_MULTIMODAL_ANALYSIS:
+                results[analysis_type] = {
+                    "analysis_type": "multimodal",
+                    "status": "error",
+                    "error": "Multimodal analysis is disabled by server configuration"
+                }
+            else:
+                # Lazy import avoids multimodal module loading during server startup.
+                from .analysis import analyze_multimodal
+                results[analysis_type] = analyze_multimodal(video_path, twelvelabs_video_id, job_manager)
                 
         elif analysis_type == "structured":
+            # Lazy import avoids loading structured pipeline dependencies at server startup.
+            from .analysis import analyze_structured
             results[analysis_type] = analyze_structured(video_path)
             
         else:
@@ -42,7 +53,11 @@ def get_supported_analysis_types() -> List[str]:
     Returns:
         List of supported analysis type names
     """
-    return ["multimodal", "structured"]
+    config = get_config()
+    supported = ["structured"]
+    if config.ENABLE_MULTIMODAL_ANALYSIS:
+        supported.insert(0, "multimodal")
+    return supported
 
 
 def get_analysis_descriptions() -> Dict[str, str]:
@@ -52,7 +67,10 @@ def get_analysis_descriptions() -> Dict[str, str]:
     Returns:
         Dict mapping analysis type names to descriptions
     """
-    return {
-        "multimodal": "Comprehensive video analysis using TwelveLabs AI - automatic upload and indexing with fast external processing",
+    descriptions = {
         "structured": "Complete internal pipeline: scene detection, OCR, transcription, matching, and summarization"
     }
+    config = get_config()
+    if config.ENABLE_MULTIMODAL_ANALYSIS:
+        descriptions["multimodal"] = "Comprehensive video analysis using TwelveLabs AI - automatic upload and indexing with fast external processing"
+    return descriptions

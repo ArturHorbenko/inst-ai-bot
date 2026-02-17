@@ -116,6 +116,10 @@ async def analyze_video(
         analysis_list = [AnalysisType(a.strip()) for a in analyses.split(",")]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Invalid analysis type: {e}")
+
+    analysis_values = [a.value for a in analysis_list]
+    if "multimodal" in analysis_values and not config.ENABLE_MULTIMODAL_ANALYSIS:
+        raise HTTPException(status_code=400, detail="Multimodal analysis is disabled by server configuration")
     
     # Generate job ID
     job_id = str(uuid.uuid4())
@@ -146,8 +150,6 @@ async def analyze_video(
                 shutil.rmtree(temp_dir)
             raise HTTPException(status_code=500, detail="Failed to create job - database error")
         
-        analysis_values = [a.value for a in analysis_list]
-
         # Start internal analyses (non-multimodal) in background.
         if any(analysis != "multimodal" for analysis in analysis_values):
             asyncio.create_task(process_video_analysis(job_id))
@@ -273,61 +275,36 @@ async def process_twelvelabs_upload(job_id: str):
         return
     
     try:
+        if not config.ENABLE_MULTIMODAL_ANALYSIS:
+            job_manager.update_job_status(job_id, "failed", "Multimodal analysis is disabled by server configuration")
+            return
+
         video_path = job_data["video_path"]
-        filename = Path(video_path).name
-        
-        # Check if this filename was already uploaded
-        existing_job = job_manager.get_video_by_filename(filename)
-        if existing_job and existing_job.get("twelve_labs_video_id"):
-            logger.info(f"Found existing TwelveLabs video for {filename}, generating summary")
-            existing_video_id = existing_job["twelve_labs_video_id"]
-            
-            # Update current job with existing video info
-            job_manager.update_twelve_labs_metadata(
-                job_id=job_id,
-                video_id=existing_video_id,
-                index_id=existing_job.get("twelve_labs_index_id"),
-                task_id=existing_job.get("twelve_labs_task_id"),
-                indexing_status="ready"
-            )
-            
-            # Generate summary
-            from video_processor.multimodal import generate_summary, extract_summary_text
-            summary_result = generate_summary(config.TWELVE_LABS_API_KEY, existing_video_id)
-            
-            # Store results
-            results_manager.store_results(job_id, "multimodal", {
-                "summary": extract_summary_text(summary_result),
-                "video_id": existing_video_id,
-                "reused_existing_upload": True
-            }, 0.0)
+
+        # Always process the uploaded file for this job.
+        from video_processor.multimodal import get_video_analysis
+
+        # Set job_manager context
+        job_manager.current_job_id = job_id
+
+        result = await asyncio.get_event_loop().run_in_executor(
+            None,
+            get_video_analysis,
+            config.TWELVE_LABS_API_KEY,
+            video_path,
+            config.TWELVE_LABS_INDEX_ID,
+            config.TWELVE_LABS_INDEX_NAME,
+            job_manager,
+            job_id
+        )
+
+        # Store final results
+        if result.get("status") == "completed":
+            results_manager.store_results(job_id, "multimodal", result, 0.0)
             finalize_job_if_complete(job_id)
-            
         else:
-            # Continue with the upload process
-            from video_processor.multimodal import get_video_analysis
-            
-            # Set job_manager context
-            job_manager.current_job_id = job_id
-            
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                get_video_analysis,
-                config.TWELVE_LABS_API_KEY,
-                video_path,
-                config.TWELVE_LABS_INDEX_ID,
-                config.TWELVE_LABS_INDEX_NAME,
-                job_manager,
-                job_id
-            )
-            
-            # Store final results
-            if result.get("status") == "completed":
-                results_manager.store_results(job_id, "multimodal", result, 0.0)
-                finalize_job_if_complete(job_id)
-            else:
-                # Update job status to failed if upload failed
-                job_manager.update_job_status(job_id, "failed", result.get("error"))
+            # Update job status to failed if upload failed
+            job_manager.update_job_status(job_id, "failed", result.get("error"))
                 
     except Exception as e:
         logger.error(f"Error in TwelveLabs upload for job {job_id}: {e}")

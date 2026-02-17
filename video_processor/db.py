@@ -25,7 +25,7 @@ class JobDocument(BaseModel):
     twelve_labs_video_id: Optional[str] = None
     twelve_labs_index_id: Optional[str] = None
     twelve_labs_task_id: Optional[str] = None
-    indexing_status: Optional[str] = None  # "pending", "validating", "running", "ready", "failed"
+    indexing_status: Optional[str] = None  # "pending", "queued", "indexing", "ready", "failed"
     indexing_progress: Optional[float] = None  # 0.0 to 1.0
     indexing_start_time: Optional[datetime] = None
     indexing_end_time: Optional[datetime] = None
@@ -215,7 +215,7 @@ class JobManager:
             if indexing_status:
                 update_data["indexing_status"] = indexing_status
                 # Set timing fields based on status
-                if indexing_status in ["pending", "validating", "running"] and not self.get_job(job_id).get("indexing_start_time"):
+                if indexing_status in ["pending", "queued", "validating", "running", "indexing"] and not self.get_job(job_id).get("indexing_start_time"):
                     update_data["indexing_start_time"] = datetime.utcnow()
                 elif indexing_status in ["ready", "failed"]:
                     update_data["indexing_end_time"] = datetime.utcnow()

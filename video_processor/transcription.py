@@ -1,10 +1,18 @@
 import os
 import subprocess
-import whisper
 
 def extract_transcription(path):
     """Extract audio transcription from video using Whisper"""
     try:
+        try:
+            import whisper
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Structured transcription requires `openai-whisper`. "
+                "Install with: pip install \"setuptools<81\" && "
+                "pip install --no-build-isolation openai-whisper==20240930"
+            ) from exc
+
         output = "./temp/audio.wav"
         # Create temp directory if it doesn't exist
         os.makedirs("./temp", exist_ok=True)

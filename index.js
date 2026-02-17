@@ -34,6 +34,81 @@ const readPrompts = () => {
   return prompts;
 };
 
+const extractAnalyzeText = (response) => {
+  if (!response) return "";
+
+  if (typeof response.data === "string") return response.data;
+  if (typeof response.text === "string") return response.text;
+
+  if (response.data && typeof response.data === "object") {
+    if (typeof response.data.text === "string") return response.data.text;
+    if (typeof response.data.summary === "string") return response.data.summary;
+    if (typeof response.data.content === "string") return response.data.content;
+  }
+
+  return JSON.stringify(response.data ?? response);
+};
+
+const extractPageData = (page) => {
+  if (!page) return [];
+  if (Array.isArray(page)) return page;
+  if (Array.isArray(page.data)) return page.data;
+  return [];
+};
+
+const listAllIndexVideos = async (client, indexId) => {
+  // v0.4.x client shape
+  if (client?.index?.video?.list) {
+    return await client.index.video.list(indexId);
+  }
+
+  // v1-style shape (future compatible)
+  const allVideos = [];
+  const pageLimit = 50;
+  let page = 1;
+
+  while (true) {
+    let response;
+    try {
+      response = await client.indexes.videos.list(indexId, { page, page_limit: pageLimit });
+    } catch {
+      response = await client.indexes.videos.list(indexId);
+    }
+
+    const videos = extractPageData(response);
+    allVideos.push(...videos);
+
+    const totalPages =
+      response?.page_info?.total_page ??
+      response?.pageInfo?.totalPage ??
+      null;
+
+    if (!totalPages || page >= totalPages || videos.length === 0) {
+      break;
+    }
+    page += 1;
+  }
+
+  return allVideos;
+};
+
+const analyzeVideoText = async (client, videoId, prompt, temperature = 0.8) => {
+  // v1-style shape (future compatible)
+  if (typeof client?.analyze === "function") {
+    return await client.analyze({
+      video_id: videoId,
+      prompt
+    });
+  }
+
+  // v0.4.x shape
+  if (client?.generate?.text) {
+    return await client.generate.text(videoId, prompt, temperature, {});
+  }
+
+  throw new Error("Unsupported TwelveLabs client API shape for text generation");
+};
+
 const cleanData = (data) => {
   console.log("Cleaning data...");
   const cleanedData = data
@@ -180,7 +255,7 @@ const testPrompt = async (videoId, promptPath) => {
     const prompt = readFileSync(promptPath, "utf-8");
     
     console.log(`Generating text for videoID: ${videoId} with prompt: ${prompt}`);
-    const res = await client.generate.text(videoId, prompt, 0.5, {});
+    const res = await analyzeVideoText(client, videoId, prompt, 0.5);
     console.log(`Text generation completed for video ${videoId}`);
     
     console.log(`Storing experiment result...`);
@@ -188,7 +263,7 @@ const testPrompt = async (videoId, promptPath) => {
       experimentsCollection,
       videoId,
       promptPath,
-      res.data
+      extractAnalyzeText(res)
     );
     
     console.log(`Experiment stored successfully:`);
@@ -227,7 +302,7 @@ const generateText = async () => {
     const collection = await connectToMongo();
     const client = new TwelveLabs({ apiKey: process.env.TWELVE_LABS_API_KEY });
     const prompts = readPrompts();
-    const videos = await client.index.video.list("6743b77b12e44d1c53a44ab5");
+    const videos = await listAllIndexVideos(client, "6743b77b12e44d1c53a44ab5");
     const videoIDs = videos.map((video) => video.id);
 
     const videosMongo = await collection.find({}, { mediaId: 1 }).toArray();
@@ -250,10 +325,10 @@ const generateText = async () => {
         console.log(
           `Generating text for videoID: ${currVideoID} with prompt: ${prompt}`
         );
-        const res = await client.generate.text(currVideoID, prompt, 0.8, {});
+        const res = await analyzeVideoText(client, currVideoID, prompt, 0.8);
         console.log(`Text generation completed for video ${currVideoID}`);
         console.log(`Updating MongoDB collection with generated text...`);
-        await updateCollection(collection, currVideoID, res.data);
+        await updateCollection(collection, currVideoID, extractAnalyzeText(res));
         console.log(
           `MongoDB collection updated successfully for video ${currVideoID}`
         );

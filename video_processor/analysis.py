@@ -11,7 +11,6 @@ from .captioning import generate_scene_description
 from .transcription import extract_transcription
 from .matching import match_transcription_to_scenes
 from .summarizer import summarize_scenes
-from .multimodal import generate_summary, get_video_analysis, extract_summary_text
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +31,15 @@ def analyze_multimodal(video_path: str, video_id: str = None, job_manager=None) 
     config = get_config()
     
     try:
+        if not config.ENABLE_MULTIMODAL_ANALYSIS:
+            return {
+                "analysis_type": "multimodal",
+                "status": "error",
+                "error": "Multimodal analysis is disabled by server configuration"
+            }
+
+        from .multimodal import generate_summary, extract_summary_text
+
         # Case 1: video_id provided - use existing video
         if video_id:
             summary_result = generate_summary(config.TWELVE_LABS_API_KEY, video_id)
@@ -45,7 +53,7 @@ def analyze_multimodal(video_path: str, video_id: str = None, job_manager=None) 
                 }
             }
         
-        # Case 2: No video_id provided - check for existing upload or upload new
+        # Case 2: No video_id provided - upload and analyze this video
         else:
             # Validate video format
             from .config import validate_video_format
@@ -56,36 +64,8 @@ def analyze_multimodal(video_path: str, video_id: str = None, job_manager=None) 
                     "error": f"Unsupported video format. Supported formats: {config.SUPPORTED_VIDEO_FORMATS}"
                 }
             
-            # Check if this filename was already uploaded to TwelveLabs
-            import os
-            filename = os.path.basename(video_path)
-            existing_job = None
-            
-            if job_manager:
-                existing_job = job_manager.get_video_by_filename(filename)
-                
-            if existing_job and existing_job.get("twelve_labs_video_id"):
-                logger.info(f"Found existing TwelveLabs video for filename: {filename}")
-                existing_video_id = existing_job["twelve_labs_video_id"]
-                
-                # Generate summary using existing video_id
-                summary_result = generate_summary(config.TWELVE_LABS_API_KEY, existing_video_id)
-                
-                return {
-                    "analysis_type": "multimodal",
-                    "status": "completed",
-                    "results": {
-                        "summary": extract_summary_text(summary_result),
-                        "video_id": existing_video_id,
-                        "index_id": existing_job.get("twelve_labs_index_id"),
-                        "task_id": existing_job.get("twelve_labs_task_id"),
-                        "index_was_created": False,
-                        "reused_existing_upload": True
-                    }
-                }
-            
-            # No existing upload found - start upload process and return immediately
-            logger.info(f"No existing upload found for {filename}, starting upload process")
+            # Start the upload process and return immediately
+            logger.info("Starting TwelveLabs upload for the current job video")
             current_job_id = getattr(job_manager, "current_job_id", None) if job_manager else None
             
             # Start the upload process asynchronously

@@ -20,7 +20,7 @@
     "dotenv": "^16.4.5",
     "mongodb": "^6.11.0",
     "openai": "^4.73.1",
-    "twelvelabs-js": "^0.3.3"
+    "twelvelabs-js": "^1.1.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.2"

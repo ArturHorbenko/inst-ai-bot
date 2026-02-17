@@ -2,6 +2,13 @@ import os
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
+
+def _parse_bool(value: str, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass
 class Config:
     VIDEO_PATH: str
@@ -16,6 +23,7 @@ class Config:
     INDEXING_TIMEOUT: int = 1800  # 30 minutes
     INDEXING_POLL_INTERVAL: int = 10  # 10 seconds
     SUPPORTED_VIDEO_FORMATS: str = "mp4,mov,avi,mkv,webm,m4v"
+    ENABLE_MULTIMODAL_ANALYSIS: bool = True
 
 def get_config():
     """Load configuration from environment variables or defaults"""
@@ -36,6 +44,7 @@ def get_config():
         INDEXING_TIMEOUT=int(os.environ.get("INDEXING_TIMEOUT", "1800")),
         INDEXING_POLL_INTERVAL=int(os.environ.get("INDEXING_POLL_INTERVAL", "10")),
         SUPPORTED_VIDEO_FORMATS=os.environ.get("SUPPORTED_VIDEO_FORMATS", "mp4,mov,avi,mkv,webm,m4v"),
+        ENABLE_MULTIMODAL_ANALYSIS=_parse_bool(os.environ.get("ENABLE_MULTIMODAL_ANALYSIS"), True),
     )
     
     return config
