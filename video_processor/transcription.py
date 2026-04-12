@@ -1,45 +1,42 @@
 import os
 import subprocess
+import logging
+from groq import Groq
 
-def extract_transcription(path):
-    """Extract audio transcription from video using Whisper"""
+logger = logging.getLogger(__name__)
+
+def extract_transcription(path, api_key=None):
+    """Extract audio transcription from video using Groq Whisper API"""
     try:
-        try:
-            import whisper
-        except ModuleNotFoundError as exc:
-            raise RuntimeError(
-                "Structured transcription requires `openai-whisper`. "
-                "Install with: pip install \"setuptools<81\" && "
-                "pip install --no-build-isolation openai-whisper==20240930"
-            ) from exc
-
-        output = "./temp/audio.wav"
-        # Create temp directory if it doesn't exist
+        audio_path = "./temp/audio.wav"
         os.makedirs("./temp", exist_ok=True)
-        
-        print("Starting audio extraction...")
-        # Add the -y flag to force overwrite without prompting
-        command = f"ffmpeg -y -i {path} -ab 160k -ac 2 -ar 44100 -vn {output}"
+
+        logger.info("Starting audio extraction...")
+        command = f"ffmpeg -y -i {path} -ab 160k -ac 2 -ar 16000 -vn {audio_path}"
         subprocess.call(command, shell=True)
 
-        print("Loading Whisper model...")
-        model = whisper.load_model("large")
+        logger.info("Transcribing audio via Groq Whisper API...")
+        client = Groq(api_key=api_key)
 
-        print("Transcribing audio...")
-        result = model.transcribe(output)
-
-        new_list = list(
-            map(
-                lambda x: {
-                    "start": round(x.get("start"), 1),
-                    "end": round(x.get("end"), 1),
-                    "text": x.get("text"),
-                },
-                result.get("segments"),
+        with open(audio_path, "rb") as audio_file:
+            response = client.audio.transcriptions.create(
+                model="whisper-large-v3-turbo",
+                file=audio_file,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
             )
-        )
-        print("Transcription result:", new_list)
-        return new_list
+
+        segments = response.segments or []
+        result = [
+            {
+                "start": round(seg["start"], 1),
+                "end": round(seg["end"], 1),
+                "text": seg["text"],
+            }
+            for seg in segments
+        ]
+        logger.info(f"Transcription result: {result}")
+        return result
     except Exception as e:
-        print(f"Error in extract_transcription: {str(e)}")
-        raise 
+        logger.error(f"Error in extract_transcription: {str(e)}")
+        raise

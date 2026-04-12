@@ -64,15 +64,15 @@ def finalize_job_if_complete(job_id: str):
 async def startup_event():
     """Initialize database connection on startup"""
     global job_manager, results_manager
-    
+
     if not db_connection.connect():
         logger.error("Failed to connect to MongoDB - server cannot start")
         raise RuntimeError("MongoDB connection required for server operation")
-    
+
     job_manager = JobManager(db_connection)
     results_manager = ResultsManager(db_connection)
     logger.info("MongoDB connection established - server ready")
-        
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up database connection on shutdown"""
@@ -81,6 +81,7 @@ async def shutdown_event():
 
 class AnalysisType(str, Enum):
     MULTIMODAL = "multimodal"
+    GEMINI = "gemini"
     STRUCTURED = "structured"
 
 class AnalysisResponse(BaseModel):
@@ -107,10 +108,10 @@ async def analyze_video(
     if not validate_video_format(video.filename, config):
         file_extension = Path(video.filename).suffix.lower() if video.filename else ""
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Unsupported video format '{file_extension}'. Supported formats: {config.SUPPORTED_VIDEO_FORMATS}"
         )
-    
+
     # Parse analysis types
     try:
         analysis_list = [AnalysisType(a.strip()) for a in analyses.split(",")]
@@ -120,19 +121,19 @@ async def analyze_video(
     analysis_values = [a.value for a in analysis_list]
     if "multimodal" in analysis_values and not config.ENABLE_MULTIMODAL_ANALYSIS:
         raise HTTPException(status_code=400, detail="Multimodal analysis is disabled by server configuration")
-    
+
     # Generate job ID
     job_id = str(uuid.uuid4())
-    
+
     # Create temporary directory for this job
     temp_dir = Path(tempfile.mkdtemp(prefix=f"video_analysis_{job_id}_"))
     video_path = temp_dir / video.filename
-    
+
     try:
         # Save uploaded video
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
-        
+
         # Initialize job tracking
         job_data = {
             "job_id": job_id,
@@ -143,13 +144,13 @@ async def analyze_video(
             "video_path": str(video_path),
             "analyses": [a.value for a in analysis_list]
         }
-        
+
         if not job_manager.create_job(job_data):
             # Cleanup and raise error if job creation fails
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
             raise HTTPException(status_code=500, detail="Failed to create job - database error")
-        
+
         # Start internal analyses (non-multimodal) in background.
         if any(analysis != "multimodal" for analysis in analysis_values):
             asyncio.create_task(process_video_analysis(job_id))
@@ -157,7 +158,7 @@ async def analyze_video(
         # If multimodal analysis is requested, start TwelveLabs upload in background.
         if "multimodal" in analysis_values:
             asyncio.create_task(process_twelvelabs_upload(job_id))
-        
+
         return AnalysisResponse(
             job_id=job_id,
             status="processing",
@@ -167,7 +168,7 @@ async def analyze_video(
             indexing_status=None,
             indexing_progress=None
         )
-        
+
     except Exception as e:
         # Cleanup on error
         if temp_dir.exists():
@@ -182,7 +183,7 @@ async def get_analysis_status(job_id: str):
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     results = None
     if job["status"] == "completed":
         results_list = results_manager.get_results(job_id)
@@ -190,7 +191,7 @@ async def get_analysis_status(job_id: str):
             results = {}
             for result in results_list:
                 results[result["analysis_type"]] = result["results"]
-    
+
     return AnalysisResponse(
         job_id=job_id,
         status=job["status"],
@@ -210,12 +211,12 @@ async def process_video_analysis(job_id: str):
     if not job_data:
         logger.error(f"Job {job_id} not found in database")
         return
-    
+
     job = {
         "video_path": job_data["video_path"],
         "analyses": job_data["analyses"]
     }
-    
+
     try:
         video_path = str(job["video_path"])
         # Handle both string arrays and AnalysisType enum arrays
@@ -228,21 +229,22 @@ async def process_video_analysis(job_id: str):
         analysis_types = [analysis for analysis in analysis_types if analysis != "multimodal"]
         if not analysis_types:
             return
-        
+
+
         # Add job_id to job_manager for tracking
         job_manager.current_job_id = job_id
-        
+
         # Run analysis in thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
         results = await loop.run_in_executor(
-            None, 
-            run_analysis, 
-            video_path, 
-            analysis_types, 
+            None,
+            run_analysis,
+            video_path,
+            analysis_types,
             None,  # twelvelabs_video_id
             job_manager  # Pass job_manager for database updates
         )
-        
+
         # Store results separately for each analysis type
         for analysis_type, result_data in results.items():
             results_manager.store_results(job_id, analysis_type, result_data, 0.0)  # TODO: track actual processing time
@@ -255,11 +257,12 @@ async def process_video_analysis(job_id: str):
                 return
 
         finalize_job_if_complete(job_id)
-        
+
+
     except Exception as e:
         error_msg = str(e)
         job_manager.update_job_status(job_id, "failed", error_msg)
-    
+
     finally:
         # Cleanup temporary files after some delay
         asyncio.create_task(cleanup_job_files(job_id, delay=3600))  # 1 hour delay
@@ -273,7 +276,7 @@ async def process_twelvelabs_upload(job_id: str):
     if not job_data:
         logger.error(f"Job {job_id} not found for TwelveLabs upload")
         return
-    
+
     try:
         if not config.ENABLE_MULTIMODAL_ANALYSIS:
             job_manager.update_job_status(job_id, "failed", "Multimodal analysis is disabled by server configuration")
@@ -303,9 +306,9 @@ async def process_twelvelabs_upload(job_id: str):
             results_manager.store_results(job_id, "multimodal", result, 0.0)
             finalize_job_if_complete(job_id)
         else:
-            # Update job status to failed if upload failed
             job_manager.update_job_status(job_id, "failed", result.get("error"))
-                
+
+
     except Exception as e:
         logger.error(f"Error in TwelveLabs upload for job {job_id}: {e}")
         job_manager.update_job_status(job_id, "failed", str(e))
@@ -315,7 +318,7 @@ async def cleanup_job_files(job_id: str, delay: int = 3600):
     Clean up temporary files after delay
     """
     await asyncio.sleep(delay)
-    
+
     job = job_manager.get_job(job_id)
     if job:
         temp_dir = job.get("temp_dir")
@@ -332,18 +335,18 @@ async def cancel_analysis(job_id: str):
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    
+
     # Delete from MongoDB
     job_manager.delete_job(job_id)
     results_manager.delete_results(job_id)
-    
+
     # Cleanup temp files
     temp_dir = job.get("temp_dir")
     if temp_dir:
         temp_dir_path = Path(temp_dir) if isinstance(temp_dir, str) else temp_dir
         if temp_dir_path.exists():
             shutil.rmtree(temp_dir_path)
-    
+
     return {"message": "Job cancelled and files cleaned up"}
 
 @app.get("/health")
@@ -352,7 +355,7 @@ async def health_check():
     Health check endpoint
     """
     return {
-        "status": "healthy", 
+        "status": "healthy",
         "version": "1.0.0",
         "mongodb": "connected",
         "storage": "mongodb"

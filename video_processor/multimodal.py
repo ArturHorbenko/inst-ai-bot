@@ -1,12 +1,23 @@
 from twelvelabs import TwelveLabs
+from google import genai
+from google.genai import types
+from pydantic import BaseModel
 import time
 import os
 import mimetypes
 import logging
-from typing import Dict, Any, Optional, Tuple, Iterable
+from typing import Dict, Any, Optional, Tuple, Iterable, List
+import requests
 from requests.exceptions import RequestException, ConnectionError, Timeout
 
 logger = logging.getLogger(__name__)
+
+# Shared prompt for both Twelve Labs and Gemini
+ANALYSIS_PROMPT = """
+Analyze an Instagram reel from a tech blogger influencer and provide a Comprehensive Description. Include the following details: Describe the reel's purpose, main topics, and target audience, explaining what it communicates and its context in the tech niche. Detail the visual elements, including the setting, objects, gadgets, and notable effects or transitions. Summarize the spoken content or dialogues, highlighting key phrases, quotes, and points emphasized by the influencer. Explain the narrative flow, describing how the content progresses from start to finish, including the opening, main segments, and conclusion. Identify and describe any calls to action, such as encouraging viewers to like, comment, follow, or click links. Analyze the influencer's persona, including tone, style, personality traits, and engagement with their audience.
+"""
+
+# ─── Twelve Labs ─────────────────────────────────────────────────────────────
 
 prompt="""
 Analyze an Instagram reel from a tech blogger influencer and provide a Comprehensive Description. Include the following details: Describe the reel's purpose, main topics, and target audience, explaining what it communicates and its context in the tech niche. Detail the visual elements, including the setting, objects, gadgets, and notable effects or transitions. Summarize the spoken content or dialogues, highlighting key phrases, quotes, and points emphasized by the influencer. Explain the narrative flow, describing how the content progresses from start to finish, including the opening, main segments, and conclusion. Identify and describe any calls to action, such as encouraging viewers to like, comment, follow, or click links. Analyze the influencer's persona, including tone, style, personality traits, and engagement with their audience. Output the results in the following JSON format: {"content_overview": "Description of the reel's purpose, topics, and target audience.","key_visual_elements": "Details of setting, objects, effects, and transitions.","spoken_content_and_dialogues": "Summary of spoken content with key phrases or quotes.","narrative_flow": "How the reel's content progresses.","calls_to_action": "Details on any calls to action.","influencer_persona": "Analysis of the influencer's tone, style, and engagement."} Ensure the JSON is valid, contains no formatting or new line characters, and includes as much detail as possible for each field.
@@ -90,23 +101,23 @@ def generate_summary(api_key, video_id):
             logger.info(f"Available attributes: {[attr for attr in dir(res) if not attr.startswith('_')]}")
     except Exception as e:
         logger.error(f"Error happened in generate_summary: {e}")
-        
+
     return res
 
 
 def extract_summary_text(summary_result) -> str:
     """
     Safely extract summary text from TwelveLabs result object.
-    
+
     Args:
         summary_result: TwelveLabs generate result object
-        
+
     Returns:
         Summary text as string
     """
     if not summary_result:
         return None
-    
+
     # First check for common response payload locations.
     if hasattr(summary_result, "data"):
         data = getattr(summary_result, "data")
@@ -128,7 +139,7 @@ def extract_summary_text(summary_result) -> str:
             value = getattr(summary_result, attr)
             if value:
                 return str(value)
-    
+
     # Fallback to string representation
     return str(summary_result)
 
@@ -136,17 +147,17 @@ def extract_summary_text(summary_result) -> str:
 def create_or_get_index(api_key: str, index_name: str = "default-index", index_id: str = None) -> Tuple[str, bool]:
     """
     Create a new index or get existing index for TwelveLabs.
-    
+
     Args:
         api_key: TwelveLabs API key
         index_name: Name for the index (used when creating new)
         index_id: Existing index ID to use (if provided, skips creation)
-        
+
     Returns:
         Tuple of (index_id, was_created)
     """
     client = TwelveLabs(api_key=api_key)
-    
+
     # If index_id is provided, use it directly.
     if index_id:
         try:
@@ -198,31 +209,31 @@ def create_or_get_index(api_key: str, index_name: str = "default-index", index_i
 def upload_video_for_indexing(api_key: str, video_path: str, index_id: str, max_retries: int = 3) -> Tuple[str, Optional[str]]:
     """
     Upload video to TwelveLabs for indexing with retry logic.
-    
+
     Args:
         api_key: TwelveLabs API key
         video_path: Path to video file
         index_id: TwelveLabs index ID
         max_retries: Maximum number of retry attempts
-        
+
     Returns:
         Tuple of (indexed_asset_id, task_id_if_available)
     """
     client = TwelveLabs(api_key=api_key)
-    
+
     # Validate video file exists and size
     if not os.path.exists(video_path):
         raise FileNotFoundError(f"Video file not found: {video_path}")
-    
+
     file_size = os.path.getsize(video_path)
     if file_size == 0:
         raise ValueError(f"Video file is empty: {video_path}")
-    
+
     # Size limit check (TwelveLabs has file size limits)
     max_size_mb = 5000  # 5GB limit
     if file_size > max_size_mb * 1024 * 1024:
         raise ValueError(f"Video file too large: {file_size / (1024*1024):.1f}MB > {max_size_mb}MB")
-    
+
     # Upload once, then retry only the indexing step.
     filename = os.path.basename(video_path)
     content_type = mimetypes.guess_type(video_path)[0] or "application/octet-stream"
@@ -258,7 +269,8 @@ def upload_video_for_indexing(api_key: str, video_path: str, index_id: str, max_
                 f"asset_id={asset_id}, task_id={task_id}"
             )
             return indexed_asset_id, task_id
-            
+
+
         except (ConnectionError, Timeout, RequestException) as e:
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt  # Exponential backoff
@@ -312,22 +324,22 @@ def wait_for_indexing_completion(
 ) -> Tuple[bool, str]:
     """
     Wait for indexing task to complete with exponential backoff.
-    
+
     Args:
         api_key: TwelveLabs API key
         index_id: Index ID
         indexed_asset_id: Indexed asset ID returned after index request
         timeout: Maximum time to wait in seconds (default: 30 minutes)
         poll_interval: Initial polling interval in seconds
-        
+
     Returns:
         Tuple of (success, video_id_or_error)
     """
     client = TwelveLabs(api_key=api_key)
-    
+
     start_time = time.time()
     current_interval = poll_interval
-    
+
     while (time.time() - start_time) < timeout:
         try:
             indexed_asset = client.indexes.indexed_assets.retrieve(
@@ -374,7 +386,7 @@ def wait_for_indexing_completion(
             else:
                 logger.warning(f"Unknown indexing status: {status}")
                 time.sleep(current_interval)
-                
+
         except (ConnectionError, Timeout, RequestException) as e:
             logger.warning(f"Network error checking task status: {e}")
             time.sleep(current_interval)
@@ -385,7 +397,7 @@ def wait_for_indexing_completion(
             else:
                 logger.error(f"Error checking task status: {e}")
                 time.sleep(current_interval)
-    
+
     error_msg = f"Indexing timeout after {timeout} seconds"
     logger.error(error_msg)
     return False, error_msg
@@ -395,13 +407,13 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
     """
     Comprehensive function that handles the complete workflow:
     upload → index → generate summary
-    
+
     Args:
         api_key: TwelveLabs API key
         video_path: Path to video file
         index_id: Existing index ID (if None, creates new index)
         index_name: Name for new index (used if index_id is None)
-        
+
     Returns:
         Dict containing analysis results and metadata
     """
@@ -409,7 +421,7 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
         # Step 1: Get or create index
         logger.info("Getting or creating index...")
         final_index_id, was_created = create_or_get_index(api_key, index_name, index_id)
-        
+
         # Update job with index info
         if job_manager and job_id:
             job_manager.update_twelve_labs_metadata(
@@ -417,11 +429,12 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
                 index_id=final_index_id,
                 indexing_status="uploading"
             )
-        
+
         # Step 2: Upload video for indexing
         logger.info("Uploading video for indexing...")
         indexed_asset_id, task_id = upload_video_for_indexing(api_key, video_path, final_index_id)
-        
+
+
         # Update job with task info
         if job_manager and job_id:
             job_manager.update_twelve_labs_metadata(
@@ -430,7 +443,7 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
                 task_id=task_id,
                 indexing_status="pending"
             )
-        
+
         # Step 3: Wait for indexing completion
         logger.info("Waiting for indexing completion...")
         success, video_id_or_error = wait_for_indexing_completion(
@@ -440,7 +453,8 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
             job_manager,
             job_id
         )
-        
+
+
         if not success:
             return {
                 "status": "failed",
@@ -448,13 +462,13 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
                 "index_id": final_index_id,
                 "task_id": task_id
             }
-        
+
         video_id = video_id_or_error
-        
+
         # Step 4: Generate summary
         logger.info("Generating summary...")
         summary_result = generate_summary(api_key, video_id)
-        
+
         return {
             "status": "completed",
             "video_id": video_id,
@@ -463,12 +477,184 @@ def get_video_analysis(api_key: str, video_path: str, index_id: str = None, inde
             "index_was_created": was_created,
             "summary": extract_summary_text(summary_result)
         }
-        
+
     except Exception as e:
         logger.error(f"Error in get_video_analysis: {e}")
         return {
             "status": "error",
             "error": str(e)
         }
-    
-    
+
+
+# ─── Gemini ──────────────────────────────────────────────────────────────────
+
+class ReelSection(BaseModel):
+    label: str                             # Hook | Setup | Problem | Concept | Build | Demo | Feature | Punchline | Reveal | Story | Lesson | CTA | Outro
+    duration_seconds: int
+    vo: Optional[str] = None              # exact spoken words, null if no voiceover in this section
+    visual: str                            # specific description — enough to reshoot
+    on_screen_text: Optional[str] = None  # designed overlay text only, null if none
+
+
+class ReelScript(BaseModel):
+    content_type: str        # sponsored | meme | lifestyle | talking_head_advice | motivational | personal_story | other
+    topic: str               # 2-4 word snake_case slug
+    duration_seconds: int
+    sections: List[ReelSection]
+    has_voiceover: bool
+
+
+_GEMINI_BASE_PROMPT = """You are analyzing an Instagram reel from a tech/lifestyle content creator.
+Your job is to produce a structured analysis that another person could use to recreate the reel from scratch.
+
+Return valid JSON matching this schema:
+{
+  "content_type": one of ["sponsored", "meme", "lifestyle", "talking_head_advice", "motivational", "personal_story", "other"],
+  "topic": "2-4 word slug, lowercase with underscores",
+  "duration_seconds": integer,
+  "sections": [
+    {
+      "label": "one of: Hook | Setup | Problem | Concept | Build | Demo | Feature | Punchline | Reveal | Story | Lesson | CTA | Outro",
+      "duration_seconds": integer,
+      "vo": "exact spoken words verbatim, or null if silent",
+      "visual": "specific description — camera angle, action, transitions",
+      "on_screen_text": "exact designed text overlay, or null if none"
+    }
+  ],
+  "has_voiceover": boolean
+}
+
+═══════════════════════════════════════════════════════════
+CONTENT_TYPE — pick exactly one
+═══════════════════════════════════════════════════════════
+- sponsored: brand partnership, product demo with clear promotional intent, has #ad or explicit mention of partnership
+- meme: humor-first content, relatable joke, often with trending audio or text overlay template, no real "teaching"
+- lifestyle: day in life, vlog, aesthetic content, personal life, location-based content with no specific lesson
+- talking_head_advice: creator directly teaching or advising — interview tips, career advice, coding tips, how-tos
+- motivational: inspirational, encouragement, "you got this" energy, mindset content
+- personal_story: narrative about the creator's own experience — career change, struggles, milestones
+- other: doesn't fit any of the above
+
+When in doubt between two: pick the one that matches the creator's PRIMARY INTENT, not the surface format.
+A funny sponsored post is still "sponsored". A motivational story about a career change is "personal_story".
+
+═══════════════════════════════════════════════════════════
+TOPIC — 2-4 words, snake_case
+═══════════════════════════════════════════════════════════
+Specific enough to distinguish from other reels, generic enough to cluster similar ones.
+Good: "no_code_app_build", "debugging_humor", "interview_prep_tips", "morning_routine", "career_change_story"
+Bad: "coding" (too vague), "how_galinie_built_a_posture_app_using_anything" (too specific)
+
+═══════════════════════════════════════════════════════════
+SECTIONS — the most important field
+═══════════════════════════════════════════════════════════
+An array of shot-list sections. Someone reading this should be able to reshoot the reel without watching the original.
+
+Each section object:
+- label: Hook | Setup | Problem | Concept | Build | Demo | Feature | Punchline | Reveal | Story | Lesson | CTA | Outro
+- duration_seconds: integer seconds for that section
+- vo: verbatim spoken words in this section, or null if silent
+- visual: specific enough to reshoot — camera angle, what is shown, action, transitions
+- on_screen_text: ONLY intentional designed overlays (title cards, callouts, brand logos, lower-thirds). null if none.
+  STRICTLY FORBIDDEN: do NOT include auto-generated captions or subtitles echoing the spoken words.
+
+RULES:
+- Section durations must sum to total reel duration (±2s tolerance)
+- vo must be VERBATIM — exact words, do not paraphrase. null if no speech in that section.
+- visual must be specific enough to reshoot:
+  ✓ "Talking head, creator at desk, holds phone toward camera"
+  ✗ "Creator talking about the app"
+- Include transitions, cuts, and effects in the visual field where notable
+- For memes with trending audio, note the audio name in the visual field
+
+═══════════════════════════════════════════════════════════
+NOW ANALYZE THE PROVIDED REEL.
+═══════════════════════════════════════════════════════════
+- Watch the entire reel before producing output
+- Be precise with VO transcription — exact words, not paraphrases
+- Be specific with visual descriptions — enough detail to reshoot
+- Make sure section durations add up to total duration
+- Return ONLY the JSON object, no preamble or explanation"""
+
+
+def _build_gemini_prompt(transcript: list = None) -> str:
+    """Build the Gemini prompt, optionally injecting a Whisper transcript."""
+    if not transcript:
+        return _GEMINI_BASE_PROMPT
+
+    lines = "\n".join(
+        f"[{seg['start']}s\u2013{seg['end']}s]: \"{seg['text'].strip()}\""
+        for seg in transcript
+    )
+    transcript_block = (
+        "\n\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n"
+        "TRANSCRIPT (Whisper-generated \u2014 authoritative source for all spoken words)\n"
+        "\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\n"
+        f"{lines}\n"
+        "\nIMPORTANT rules when a transcript is provided:\n"
+        "- All VO lines MUST use the exact words from this transcript. Do not listen to the audio independently.\n"
+        "- CRITICAL: The reel's auto-generated captions / subtitles are NOT on-screen text. They are a visual echo of this transcript — the exact same words shown as overlaid text. DO NOT include them in any On-screen text line. Treat them as invisible.\n"
+        "- Only include On-screen text for DESIGNED GRAPHIC ELEMENTS: title cards, callout boxes, branded lower-thirds, emphasis graphics, product names, URLs — things a video editor manually added that are NOT captions of the spoken audio.\n"
+        "- When in doubt: if the text on screen matches or closely paraphrases what is being said at that moment, it is a caption. Omit it.\n"
+    )
+    return _GEMINI_BASE_PROMPT.replace(
+        "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL.",
+        transcript_block + "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL."
+    )
+
+
+def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None) -> Dict[str, Any]:
+    """
+    Analyze a video using Google Gemini.
+    Uploads the video, sends it with the prompt, and returns structured JSON.
+
+    Args:
+        api_key: Google Gemini API key
+        video_path: Path to video file
+        transcript: Optional Whisper transcript [{start, end, text}, ...] to inject into prompt
+
+    Returns:
+        Dict containing analysis results with status and summary
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    file_size = os.path.getsize(video_path)
+    if file_size == 0:
+        raise ValueError(f"Video file is empty: {video_path}")
+
+    client = genai.Client(api_key=api_key)
+
+    logger.info(f"Uploading video to Gemini: {video_path} ({file_size / (1024*1024):.1f}MB)")
+    video_file = client.files.upload(file=video_path)
+    logger.info(f"Video uploaded: {video_file.name}, state: {video_file.state}")
+
+    # Wait for file to become ACTIVE before generating
+    while video_file.state.name == "PROCESSING":
+        logger.info("Waiting for Gemini file to become ACTIVE...")
+        time.sleep(5)
+        video_file = client.files.get(name=video_file.name)
+
+    if video_file.state.name != "ACTIVE":
+        raise RuntimeError(f"Gemini file entered unexpected state: {video_file.state.name}")
+
+    gemini_prompt = _build_gemini_prompt(transcript)
+
+    logger.info("Generating Gemini analysis...")
+    response = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=[video_file, gemini_prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=ReelScript,
+            temperature=0.7,
+        ),
+    )
+
+    result = response.parsed
+    logger.info("Gemini analysis completed successfully")
+
+    return {
+        "status": "completed",
+        "summary": result.model_dump() if result else response.text,
+    }
