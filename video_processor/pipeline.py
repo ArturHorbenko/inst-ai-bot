@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 
 
-def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id: str = None, job_manager=None) -> Dict[str, Any]:
+def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id: str = None, job_manager=None, results_manager=None, job_id: str = None) -> Dict[str, Any]:
     """
     Route analysis requests to appropriate analysis functions.
 
@@ -32,11 +32,11 @@ def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id
 
         elif analysis_type == "gemini":
             from .analysis import analyze_gemini
-            results[analysis_type] = analyze_gemini(video_path)
+            results[analysis_type] = analyze_gemini(video_path, results_manager=results_manager, job_id=job_id)
 
         elif analysis_type == "structured":
             from .analysis import analyze_structured
-            results[analysis_type] = analyze_structured(video_path)
+            results[analysis_type] = analyze_structured(video_path, results_manager=results_manager, job_id=job_id)
 
         else:
             results[analysis_type] = {

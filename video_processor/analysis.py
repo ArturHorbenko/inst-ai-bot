@@ -11,6 +11,7 @@ from .captioning import generate_scene_description
 from .transcription import extract_transcription
 from .matching import match_transcription_to_scenes
 from .summarizer import summarize_scenes
+from .multimodal import analyze_video_gemini
 
 logger = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ def analyze_multimodal(video_path: str, video_id: str = None, job_manager=None) 
         }
 
 
-def analyze_gemini(video_path: str, video_id: str = None, job_manager=None) -> Dict[str, Any]:
+def analyze_gemini(video_path: str, video_id: str = None, job_manager=None, results_manager=None, job_id: str = None) -> Dict[str, Any]:
     """
     Analyze video using Google Gemini multimodal API.
     Synchronous — returns results directly, no indexing step.
@@ -159,6 +160,8 @@ def analyze_gemini(video_path: str, video_id: str = None, job_manager=None) -> D
         video_path: Path to video file
         video_id: Unused, kept for interface compatibility
         job_manager: Unused, kept for interface compatibility
+        results_manager: ResultsManager instance for transcription caching (optional)
+        job_id: Job ID for storing transcription cache entry (optional)
 
     Returns:
         Dict containing Gemini analysis results
@@ -176,10 +179,25 @@ def analyze_gemini(video_path: str, video_id: str = None, job_manager=None) -> D
 
         # Run Groq Whisper transcription first to improve VO accuracy
         transcript = None
+        video_filename = os.path.basename(video_path)
         try:
-            logger.info("Running Groq Whisper transcription before Gemini analysis...")
-            transcript = extract_transcription(video_path, api_key=config.GROQ_API_KEY)
-            logger.info(f"Groq transcription complete: {len(transcript)} segments")
+            if results_manager:
+                transcript = results_manager.get_transcription_by_filename(video_filename)
+
+            if transcript is not None:
+                logger.info(f"Reusing cached transcription for {video_filename} ({len(transcript)} segments)")
+            else:
+                logger.info("Running Groq Whisper transcription before Gemini analysis...")
+                transcript = extract_transcription(video_path, api_key=config.GROQ_API_KEY)
+                logger.info(f"Groq transcription complete: {len(transcript)} segments")
+                if results_manager and job_id:
+                    results_manager.store_results(
+                        job_id=job_id,
+                        analysis_type="transcription",
+                        results={"segments": transcript},
+                        processing_time=0.0,
+                        video_filename=video_filename,
+                    )
         except Exception as e:
             logger.warning(f"Groq transcription failed, proceeding without transcript: {e}")
 
@@ -201,13 +219,15 @@ def analyze_gemini(video_path: str, video_id: str = None, job_manager=None) -> D
         }
 
 
-def analyze_structured(video_path: str) -> Dict[str, Any]:
+def analyze_structured(video_path: str, results_manager=None, job_id: str = None) -> Dict[str, Any]:
     """
     Analyze video using complete structured pipeline.
     Runs: scene detection → OCR → captioning → transcription → matching → summarization
 
     Args:
         video_path: Path to video file
+        results_manager: ResultsManager instance for transcription caching (optional)
+        job_id: Job ID for storing transcription cache entry (optional)
 
     Returns:
         Dict containing structured analysis results
@@ -218,17 +238,42 @@ def analyze_structured(video_path: str) -> Dict[str, Any]:
         # Create output directory if it doesn't exist
         os.makedirs(config.IMAGE_DIR, exist_ok=True)
 
-        # Run transcription and scene processing in parallel
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # Start transcription extraction
-            transcription_future = executor.submit(extract_transcription, video_path)
+        video_filename = os.path.basename(video_path)
 
-            # Start scene detection and processing
-            scene_future = executor.submit(_process_scenes_structured, video_path, config.IMAGE_DIR)
+        # Check for a cached transcription before launching the thread pool
+        cached_transcription = None
+        if results_manager:
+            cached_transcription = results_manager.get_transcription_by_filename(video_filename)
+            if cached_transcription is not None:
+                logger.info(f"Reusing cached transcription for {video_filename} ({len(cached_transcription)} segments)")
 
-            # Get results
-            transcription_result = transcription_future.result()
-            scenes_result = scene_future.result()
+        if cached_transcription is not None:
+            # Skip transcription thread — run scene processing only
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                scene_future = executor.submit(_process_scenes_structured, video_path, config.IMAGE_DIR)
+                scenes_result = scene_future.result()
+            transcription_result = cached_transcription
+        else:
+            # Run transcription and scene processing in parallel
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                # Start transcription extraction
+                transcription_future = executor.submit(extract_transcription, video_path)
+
+                # Start scene detection and processing
+                scene_future = executor.submit(_process_scenes_structured, video_path, config.IMAGE_DIR)
+
+                # Get results
+                transcription_result = transcription_future.result()
+                scenes_result = scene_future.result()
+
+            if transcription_result and results_manager and job_id:
+                results_manager.store_results(
+                    job_id=job_id,
+                    analysis_type="transcription",
+                    results={"segments": transcription_result},
+                    processing_time=0.0,
+                    video_filename=video_filename,
+                )
 
         # Match transcription to scenes
         if transcription_result:

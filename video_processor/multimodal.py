@@ -496,12 +496,20 @@ class ReelSection(BaseModel):
     on_screen_text: Optional[str] = None  # designed overlay text only, null if none
 
 
+class MemeDetails(BaseModel):
+    joke_mechanic: str              # the comedic device — irony, subversion, exaggeration, relatable truth, etc.
+    what_its_satirizing: str        # what behavior, trend, or assumption is being mocked or parodied
+    implied_vs_literal: str         # what is literally shown vs what is actually meant
+    cultural_reference: Optional[str] = None  # trending audio, format, or cultural moment it riffs on, null if none
+
+
 class ReelScript(BaseModel):
     content_type: str        # sponsored | meme | lifestyle | talking_head_advice | motivational | personal_story | other
     topic: str               # 2-4 word snake_case slug
     duration_seconds: int
     sections: List[ReelSection]
     has_voiceover: bool
+    meme_details: Optional[MemeDetails] = None  # only populated when content_type is "meme"
 
 
 _GEMINI_BASE_PROMPT = """You are analyzing an Instagram reel from a tech/lifestyle content creator.
@@ -521,8 +529,16 @@ Return valid JSON matching this schema:
       "on_screen_text": "exact designed text overlay, or null if none"
     }
   ],
-  "has_voiceover": boolean
+  "has_voiceover": boolean,
+  "meme_details": {
+    "joke_mechanic": "string",
+    "what_its_satirizing": "string",
+    "implied_vs_literal": "string",
+    "cultural_reference": "string or null"
+  }
 }
+
+Note: "meme_details" must be null for all content_types except "meme".
 
 ═══════════════════════════════════════════════════════════
 CONTENT_TYPE — pick exactly one
@@ -566,6 +582,18 @@ RULES:
   ✗ "Creator talking about the app"
 - Include transitions, cuts, and effects in the visual field where notable
 - For memes with trending audio, note the audio name in the visual field
+
+═══════════════════════════════════════════════════════════
+MEME ANALYSIS — only when content_type is "meme"
+═══════════════════════════════════════════════════════════
+When the reel is a meme, populate the "meme_details" object. Leave it null for all other content types.
+
+- joke_mechanic: name the comedic device. Examples: "ironic contrast between caption and action", "relatable exaggeration", "subverted expectation", "deadpan literalism"
+- what_its_satirizing: the specific behavior, trend, or cultural assumption being mocked. Be precise — not "work culture" but "the idea that approving AI outputs counts as working hard"
+- implied_vs_literal: two-part answer. Literal = what the video actually shows. Implied = what the creator actually means. The gap between these IS the joke.
+- cultural_reference: the trend, audio, format, or moment it riffs on. null if it's an original format.
+
+For memes, the visual description in sections should note behavioral cues and implied actions — not just what is in frame, but what the body language and context communicate.
 
 ═══════════════════════════════════════════════════════════
 NOW ANALYZE THE PROVIDED REEL.

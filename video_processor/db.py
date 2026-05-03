@@ -37,6 +37,7 @@ class ResultDocument(BaseModel):
     processing_time: float
     created_at: datetime
     updated_at: Optional[datetime] = None
+    video_filename: Optional[str] = None
 
 class DatabaseConnection:
     def __init__(self, config):
@@ -77,10 +78,11 @@ class DatabaseConnection:
         jobs_col.create_index("indexing_status")
         jobs_col.create_index("video_filename")  # For duplicate detection
         
-        # Results collection indexes  
+        # Results collection indexes
         results_col.create_index("job_id")
         results_col.create_index("analysis_type")
         results_col.create_index([("job_id", 1), ("analysis_type", 1)], unique=True)
+        results_col.create_index([("video_filename", 1), ("analysis_type", 1)])
         
     @property
     def db(self):
@@ -241,7 +243,7 @@ class ResultsManager:
     def __init__(self, db_connection: DatabaseConnection):
         self.db = db_connection
         
-    def store_results(self, job_id: str, analysis_type: str, results: Dict[str, Any], processing_time: float) -> bool:
+    def store_results(self, job_id: str, analysis_type: str, results: Dict[str, Any], processing_time: float, video_filename: Optional[str] = None) -> bool:
         """Store analysis results"""
         try:
             now = datetime.utcnow()
@@ -251,7 +253,8 @@ class ResultsManager:
                 results=results,
                 processing_time=processing_time,
                 created_at=now,
-                updated_at=now
+                updated_at=now,
+                video_filename=video_filename
             )
 
             payload = result_doc.dict()
@@ -267,6 +270,20 @@ class ResultsManager:
             logger.error(f"Failed to store results for job {job_id}: {e}")
             return False
             
+    def get_transcription_by_filename(self, video_filename: str) -> Optional[List[Dict]]:
+        """Return cached transcription segments for a video filename, or None."""
+        try:
+            doc = self.db.results_collection.find_one({
+                "video_filename": video_filename,
+                "analysis_type": "transcription",
+            })
+            if doc:
+                return doc.get("results", {}).get("segments")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get transcription for {video_filename}: {e}")
+            return None
+
     def get_results(self, job_id: str) -> List[Dict[str, Any]]:
         """Get all results for a job"""
         try:

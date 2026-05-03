@@ -190,7 +190,8 @@ async def get_analysis_status(job_id: str):
         if results_list:
             results = {}
             for result in results_list:
-                results[result["analysis_type"]] = result["results"]
+                if result["analysis_type"] != "transcription":
+                    results[result["analysis_type"]] = result["results"]
 
     return AnalysisResponse(
         job_id=job_id,
@@ -236,13 +237,18 @@ async def process_video_analysis(job_id: str):
 
         # Run analysis in thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
+        import functools
         results = await loop.run_in_executor(
             None,
-            run_analysis,
-            video_path,
-            analysis_types,
-            None,  # twelvelabs_video_id
-            job_manager  # Pass job_manager for database updates
+            functools.partial(
+                run_analysis,
+                video_path,
+                analysis_types,
+                None,  # twelvelabs_video_id
+                job_manager,
+                results_manager,
+                job_id,
+            )
         )
 
         # Store results separately for each analysis type
