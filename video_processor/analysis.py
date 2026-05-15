@@ -11,7 +11,7 @@ from .captioning import generate_scene_description
 from .transcription import extract_transcription
 from .matching import match_transcription_to_scenes
 from .summarizer import summarize_scenes
-from .multimodal import analyze_video_gemini
+from .multimodal import analyze_video_gemini, analyze_video_format_extraction
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +214,73 @@ def analyze_gemini(video_path: str, video_id: str = None, job_manager=None, resu
     except Exception as e:
         return {
             "analysis_type": "gemini",
+            "status": "error",
+            "error": str(e)
+        }
+
+
+def analyze_format_extraction(video_path: str, results_manager=None, job_id: str = None) -> Dict[str, Any]:
+    """
+    Analyze a tutorial video to extract the video format being taught.
+    Uses Whisper transcription + Gemini multimodal to synthesize a reusable format template.
+
+    Args:
+        video_path: Path to video file
+        results_manager: ResultsManager instance for transcription caching (optional)
+        job_id: Job ID for storing transcription cache entry (optional)
+
+    Returns:
+        Dict containing format extraction results with structured JSON and markdown
+    """
+    config = get_config()
+
+    try:
+        from .config import validate_video_format
+        if not validate_video_format(video_path, config):
+            return {
+                "analysis_type": "format_extraction",
+                "status": "error",
+                "error": f"Unsupported video format. Supported formats: {config.SUPPORTED_VIDEO_FORMATS}"
+            }
+
+        # Run Groq Whisper transcription — primary knowledge source
+        transcript = None
+        video_filename = os.path.basename(video_path)
+        try:
+            if results_manager:
+                transcript = results_manager.get_transcription_by_filename(video_filename)
+
+            if transcript is not None:
+                logger.info(f"Reusing cached transcription for {video_filename} ({len(transcript)} segments)")
+            else:
+                logger.info("Running Groq Whisper transcription for format extraction...")
+                transcript = extract_transcription(video_path, api_key=config.GROQ_API_KEY)
+                logger.info(f"Groq transcription complete: {len(transcript)} segments")
+                if results_manager and job_id:
+                    results_manager.store_results(
+                        job_id=job_id,
+                        analysis_type="transcription",
+                        results={"segments": transcript},
+                        processing_time=0.0,
+                        video_filename=video_filename,
+                    )
+        except Exception as e:
+            logger.warning(f"Groq transcription failed, proceeding without transcript: {e}")
+
+        result = analyze_video_format_extraction(config.GEMINI_API_KEY, video_path, transcript)
+
+        return {
+            "analysis_type": "format_extraction",
+            "status": "completed",
+            "results": {
+                "summary": result["summary"],
+                "markdown": result.get("markdown"),
+            }
+        }
+
+    except Exception as e:
+        return {
+            "analysis_type": "format_extraction",
             "status": "error",
             "error": str(e)
         }

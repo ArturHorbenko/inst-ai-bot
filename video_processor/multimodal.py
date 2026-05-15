@@ -686,3 +686,278 @@ def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None)
         "status": "completed",
         "summary": result.model_dump() if result else response.text,
     }
+
+
+# ─── Format Extraction ──────────────────────────────────────────────────────
+
+class SectionTemplate(BaseModel):
+    position: str              # "opening", "middle", "closing"
+    role: str                  # "hook", "setup", "tension", "payoff", "cta", etc.
+    duration_guidance: str     # "1-3 seconds", "20-30% of total"
+    description: str           # what this section should accomplish
+    visual_style_notes: Optional[str] = None
+    audio_notes: Optional[str] = None
+    on_screen_text_pattern: Optional[str] = None
+
+
+class FormatTemplate(BaseModel):
+    format_name: str                # "The Ironic Demo", "Before/After Reveal"
+    description: str                # 2-3 sentence summary of the format
+    target_audience: str            # who this format works for
+    content_categories: List[str]   # what niches/topics suit this format
+    total_duration_range: str       # "15-30 seconds"
+    structure: List[SectionTemplate]
+    pacing_guidelines: str
+    hook_mechanics: str             # what makes the opening work
+    visual_style_notes: str
+    audio_strategy: str             # voiceover vs music vs trending audio
+    when_to_use: str
+    what_makes_it_work: str         # underlying engagement principle
+    common_mistakes: Optional[str] = None
+    example_topics: List[str]       # 3-5 example topics that would work
+
+
+_FORMAT_EXTRACTION_PROMPT = """You are watching a TUTORIAL VIDEO where a content creator EXPLAINS a short-form video format.
+The creator is teaching you the structure, pacing, and mechanics of a specific reel/short format.
+
+YOUR TASK: Extract the FORMAT being taught — NOT a description of the tutorial itself.
+Think of yourself as a student taking notes on the lesson. The output should be a reusable template
+that a tech/software engineering content creator could follow to make their own video in this format.
+
+═══════════════════════════════════════════════════════════
+CREATOR CONTEXT
+═══════════════════════════════════════════════════════════
+The person who will USE this template is a tech content creator covering:
+- Software engineering, coding, developer tools, AI/ML
+- Corporate/office life, startup culture, tech industry
+- Career advice, interview prep, job hunting in tech
+- Humorous takes on dev life, debugging, meetings, code reviews
+- Honest/vulnerable content about burnout, imposter syndrome, career pivots
+
+When writing target_audience, content_categories, and example_topics — frame everything
+through this lens. The format itself is universal, but the APPLICATION should feel native
+to a tech creator's world.
+
+Return valid JSON matching this schema:
+{
+  "format_name": "catchy name for the format (e.g. 'The Ironic Demo', 'Before/After Reveal')",
+  "description": "2-3 sentence summary of what this format IS and how it works",
+  "target_audience": "who should use this format — frame for tech/SWE/corporate creators",
+  "content_categories": ["list of specific tech/corporate/dev life topics this works for"],
+  "total_duration_range": "e.g. '15-30 seconds' or '30-60 seconds'",
+  "structure": [
+    {
+      "position": "opening | middle | closing",
+      "role": "hook | setup | tension | build | demo | payoff | reveal | lesson | cta | outro",
+      "duration_guidance": "e.g. '1-3 seconds' or '20-30% of total'",
+      "description": "what this section should accomplish — written as instruction to the creator",
+      "visual_style_notes": "camera angle, framing, transitions, effects to use — or null",
+      "audio_notes": "voiceover, music, sound effects guidance — or null",
+      "on_screen_text_pattern": "type of text overlay to use — or null"
+    }
+  ],
+  "pacing_guidelines": "how the rhythm/tempo should flow across the video",
+  "hook_mechanics": "what makes the first 1-3 seconds grab attention — the specific technique",
+  "visual_style_notes": "overall visual approach, editing style, aesthetic",
+  "audio_strategy": "voiceover vs music vs trending audio vs silence — and why",
+  "when_to_use": "situations, goals, or content types where this format excels",
+  "what_makes_it_work": "the underlying psychological or engagement principle — WHY this format is effective",
+  "common_mistakes": "pitfalls to avoid when using this format — or null if not discussed",
+  "example_topics": ["5 example topics — mix of: coding/tech humor, corporate life, career advice, honest/vulnerable, and lifestyle"]
+}
+
+═══════════════════════════════════════════════════════════
+KEY RULES
+═══════════════════════════════════════════════════════════
+
+1. EXTRACT THE TAUGHT FORMAT, NOT THE TUTORIAL
+   The creator is explaining a format. Your job is to capture WHAT they're teaching, not HOW they're teaching it.
+   - Good: "Open with a bold claim that challenges conventional wisdom"
+   - Bad: "The creator explains that you should open with a bold claim"
+
+2. GENERALIZE THE STRUCTURE, SPECIALIZE THE EXAMPLES
+   The format structure should be universal (it works for any topic).
+   But example_topics and content_categories should be grounded in the tech/SWE/corporate niche.
+   Think: debugging, code reviews, standups, deploy Fridays, imposter syndrome, career pivots,
+   side projects, tech Twitter drama, AI hype, startup culture, work-life balance.
+
+3. USE THE TRANSCRIPT AS PRIMARY SOURCE
+   The creator's spoken words contain the core knowledge — the structure, tips, and reasoning.
+   The visual content shows demonstrations and examples. Both matter, but the transcript is primary.
+
+4. STRUCTURE SECTIONS AS INSTRUCTIONS
+   Each section's description should read like a directive to a creator:
+   - Good: "Open with a surprising statistic or counterintuitive claim that stops the scroll"
+   - Bad: "The opening section contains a hook"
+
+5. CAPTURE THE WHY
+   When the creator explains WHY something works (psychology, algorithm, audience behavior),
+   capture that in what_makes_it_work and hook_mechanics.
+
+6. BE SPECIFIC ABOUT TIMING
+   If the creator mentions specific durations or ratios, preserve them.
+   "Hook should be under 2 seconds" is more useful than "keep the hook short".
+
+7. EXAMPLE TOPICS SHOULD BE VARIED
+   Aim for a mix across these flavors:
+   - Tech humor (debugging, legacy code, meetings that could've been emails)
+   - Corporate reality (standups, sprint planning, performance reviews)
+   - Career/growth (interview prep, salary negotiation, switching stacks)
+   - Honest/vulnerable (burnout, imposter syndrome, rejection, layoffs)
+   - Lifestyle crossover (WFH life, side projects, conference travel)
+
+═══════════════════════════════════════════════════════════
+NOW EXTRACT THE FORMAT FROM THIS TUTORIAL.
+═══════════════════════════════════════════════════════════
+- Watch/listen to the entire tutorial before producing output
+- Capture ALL format details the creator teaches, not just the obvious ones
+- If the creator teaches multiple variations, focus on the PRIMARY format
+- Return ONLY the JSON object, no preamble or explanation"""
+
+
+def _build_format_extraction_prompt(transcript: list = None) -> str:
+    """Build the format extraction prompt, optionally injecting a Whisper transcript."""
+    if not transcript:
+        return _FORMAT_EXTRACTION_PROMPT
+
+    lines = "\n".join(
+        f"[{seg['start']}s–{seg['end']}s]: \"{seg['text'].strip()}\""
+        for seg in transcript
+    )
+    transcript_block = (
+        "\n═══════════════════════════════════════════════════════════\n"
+        "TRANSCRIPT (Whisper-generated — the creator's verbal explanation)\n"
+        "═══════════════════════════════════════════════════════════\n"
+        "This is the PRIMARY source of knowledge. The creator is explaining the format in their own words.\n"
+        "Extract the format details, structure, and tips they describe.\n\n"
+        f"{lines}\n"
+    )
+    return _FORMAT_EXTRACTION_PROMPT.replace(
+        "\n═══════════════════════════════════════════════════════════\nNOW EXTRACT THE FORMAT FROM THIS TUTORIAL.",
+        transcript_block + "\n═══════════════════════════════════════════════════════════\nNOW EXTRACT THE FORMAT FROM THIS TUTORIAL."
+    )
+
+
+def analyze_video_format_extraction(api_key: str, video_path: str, transcript: list = None) -> Dict[str, Any]:
+    """
+    Analyze a tutorial video to extract the video format being taught.
+    Uploads the video to Gemini and returns a structured FormatTemplate.
+
+    Args:
+        api_key: Google Gemini API key
+        video_path: Path to video file
+        transcript: Optional Whisper transcript [{start, end, text}, ...]
+
+    Returns:
+        Dict containing format template results with status, summary (JSON), and markdown
+    """
+    if not os.path.exists(video_path):
+        raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    file_size = os.path.getsize(video_path)
+    if file_size == 0:
+        raise ValueError(f"Video file is empty: {video_path}")
+
+    client = genai.Client(api_key=api_key)
+
+    logger.info(f"Uploading video to Gemini for format extraction: {video_path} ({file_size / (1024*1024):.1f}MB)")
+    video_file = client.files.upload(file=video_path)
+    logger.info(f"Video uploaded: {video_file.name}, state: {video_file.state}")
+
+    while video_file.state.name == "PROCESSING":
+        logger.info("Waiting for Gemini file to become ACTIVE...")
+        time.sleep(5)
+        video_file = client.files.get(name=video_file.name)
+
+    if video_file.state.name != "ACTIVE":
+        raise RuntimeError(f"Gemini file entered unexpected state: {video_file.state.name}")
+
+    prompt = _build_format_extraction_prompt(transcript)
+
+    logger.info("Generating format extraction analysis...")
+    response = client.models.generate_content(
+        model="gemini-2.5-pro",
+        contents=[video_file, prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=FormatTemplate,
+            temperature=0.7,
+        ),
+    )
+
+    result = response.parsed
+    logger.info("Format extraction completed successfully")
+
+    summary = result.model_dump() if result else response.text
+    markdown = render_format_markdown(result) if result else None
+
+    return {
+        "status": "completed",
+        "summary": summary,
+        "markdown": markdown,
+    }
+
+
+def render_format_markdown(template: FormatTemplate) -> str:
+    """Convert a FormatTemplate into a clean markdown skill file."""
+    sections_table = "| # | Role | Duration | What to Do |\n|---|------|----------|------------|\n"
+    for i, section in enumerate(template.structure, 1):
+        sections_table += f"| {i} | {section.role.title()} | {section.duration_guidance} | {section.description} |\n"
+
+    section_details = ""
+    for i, section in enumerate(template.structure, 1):
+        section_details += f"\n**{i}. {section.role.title()}** ({section.position}, {section.duration_guidance})\n"
+        section_details += f"{section.description}\n"
+        if section.visual_style_notes:
+            section_details += f"- *Visual:* {section.visual_style_notes}\n"
+        if section.audio_notes:
+            section_details += f"- *Audio:* {section.audio_notes}\n"
+        if section.on_screen_text_pattern:
+            section_details += f"- *Text overlay:* {section.on_screen_text_pattern}\n"
+
+    categories = ", ".join(template.content_categories)
+    examples = "\n".join(f"- {topic}" for topic in template.example_topics)
+
+    common_mistakes_section = ""
+    if template.common_mistakes:
+        common_mistakes_section = f"\n## Common Mistakes\n{template.common_mistakes}\n"
+
+    return f"""# Format: {template.format_name}
+
+> {template.description}
+
+**Duration:** {template.total_duration_range}
+
+## When to Use
+{template.when_to_use}
+
+## Target Audience
+{template.target_audience}
+
+**Works well for:** {categories}
+
+## What Makes It Work
+{template.what_makes_it_work}
+
+## Structure
+
+{sections_table}
+
+### Section Details
+{section_details}
+
+## Pacing
+{template.pacing_guidelines}
+
+## Hook Mechanics
+{template.hook_mechanics}
+
+## Visual Style
+{template.visual_style_notes}
+
+## Audio Strategy
+{template.audio_strategy}
+{common_mistakes_section}
+## Example Topics
+{examples}
+"""

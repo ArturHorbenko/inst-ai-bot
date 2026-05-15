@@ -38,6 +38,10 @@ def run_analysis(video_path: str, analysis_types: List[str], twelvelabs_video_id
             from .analysis import analyze_structured
             results[analysis_type] = analyze_structured(video_path, results_manager=results_manager, job_id=job_id)
 
+        elif analysis_type == "format_extraction":
+            from .analysis import analyze_format_extraction
+            results[analysis_type] = analyze_format_extraction(video_path, results_manager=results_manager, job_id=job_id)
+
         else:
             results[analysis_type] = {
                 "analysis_type": analysis_type,
@@ -57,7 +61,7 @@ def get_supported_analysis_types() -> List[str]:
     """
     from .config import get_config
     config = get_config()
-    supported = ["gemini", "structured"]
+    supported = ["gemini", "structured", "format_extraction"]
     if config.ENABLE_MULTIMODAL_ANALYSIS:
         supported.insert(0, "multimodal")
     return supported
@@ -74,7 +78,8 @@ def get_analysis_descriptions() -> Dict[str, str]:
     config = get_config()
     descriptions = {
         "gemini": "Comprehensive video analysis using Google Gemini 2.5 Pro - synchronous, structured JSON output with Groq Whisper transcript injection",
-        "structured": "Complete internal pipeline: scene detection, OCR, transcription, matching, and summarization"
+        "structured": "Complete internal pipeline: scene detection, OCR, transcription, matching, and summarization",
+        "format_extraction": "Extract reusable video format template from tutorial videos using Whisper + Gemini — outputs structured JSON and markdown skill file"
     }
     if config.ENABLE_MULTIMODAL_ANALYSIS:
         descriptions["multimodal"] = "Comprehensive video analysis using TwelveLabs AI - automatic upload and indexing with fast external processing"

@@ -83,6 +83,7 @@ class AnalysisType(str, Enum):
     MULTIMODAL = "multimodal"
     GEMINI = "gemini"
     STRUCTURED = "structured"
+    FORMAT_EXTRACTION = "format_extraction"
 
 class AnalysisResponse(BaseModel):
     job_id: str
