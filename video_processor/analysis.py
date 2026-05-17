@@ -151,7 +151,7 @@ def analyze_multimodal(video_path: str, video_id: str = None, job_manager=None) 
         }
 
 
-def analyze_gemini(video_path: str, video_id: str = None, job_manager=None, results_manager=None, job_id: str = None) -> Dict[str, Any]:
+def analyze_gemini(video_path: str, video_id: str = None, job_manager=None, results_manager=None, job_id: str = None, source_metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     Analyze video using Google Gemini multimodal API.
     Synchronous — returns results directly, no indexing step.
@@ -201,7 +201,17 @@ def analyze_gemini(video_path: str, video_id: str = None, job_manager=None, resu
         except Exception as e:
             logger.warning(f"Groq transcription failed, proceeding without transcript: {e}")
 
-        result = analyze_video_gemini(config.GEMINI_API_KEY, video_path, transcript)
+        caption = (source_metadata or {}).get("caption")
+        hashtags = (source_metadata or {}).get("hashtags")
+        comments = (source_metadata or {}).get("comments")
+        result = analyze_video_gemini(
+            config.GEMINI_API_KEY,
+            video_path,
+            transcript,
+            caption=caption,
+            hashtags=hashtags,
+            comments=comments,
+        )
 
         return {
             "analysis_type": "gemini",

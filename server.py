@@ -14,6 +14,7 @@ from pathlib import Path
 from video_processor.pipeline import run_analysis, get_supported_analysis_types, get_analysis_descriptions
 from video_processor.config import get_config, validate_video_format
 from video_processor.db import DatabaseConnection, JobManager, ResultsManager
+from video_processor.downloader import download_instagram_reel
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -96,6 +97,14 @@ class AnalysisResponse(BaseModel):
     twelve_labs_index_id: Optional[str] = None
     indexing_status: Optional[str] = None
     indexing_progress: Optional[float] = None
+    # Populated for jobs created via /analyze/url
+    source_url: Optional[str] = None
+    source_metadata: Optional[Dict[str, Any]] = None
+
+
+class AnalyzeUrlRequest(BaseModel):
+    url: str
+    analyses: Optional[List[str]] = None
 
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_video(
@@ -176,6 +185,85 @@ async def analyze_video(
             shutil.rmtree(temp_dir)
         raise HTTPException(status_code=500, detail=f"Error processing video: {str(e)}")
 
+
+@app.post("/analyze/url", response_model=AnalysisResponse)
+async def analyze_video_from_url(request: AnalyzeUrlRequest):
+    """
+    Download an Instagram reel from a URL and kick off analysis.
+    """
+    analysis_values = request.analyses if request.analyses else ["gemini"]
+
+    try:
+        analysis_list = [AnalysisType(a.strip()) for a in analysis_values]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid analysis type: {e}")
+
+    analysis_values = [a.value for a in analysis_list]
+    if "multimodal" in analysis_values and not config.ENABLE_MULTIMODAL_ANALYSIS:
+        raise HTTPException(status_code=400, detail="Multimodal analysis is disabled by server configuration")
+
+    job_id = str(uuid.uuid4())
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"video_analysis_{job_id}_"))
+
+    try:
+        try:
+            video_path, source_metadata = download_instagram_reel(request.url, temp_dir)
+        except ValueError as e:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(e))
+
+        if not validate_video_format(video_path.name, config):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Downloaded file has unsupported format: {video_path.name}"
+            )
+
+        job_data = {
+            "job_id": job_id,
+            "video_filename": video_path.name,
+            "video_size": video_path.stat().st_size,
+            "video_content_type": "video/mp4",
+            "temp_dir": str(temp_dir),
+            "video_path": str(video_path),
+            "analyses": analysis_values,
+            "source_url": request.url,
+            "source_metadata": source_metadata,
+        }
+
+        if not job_manager.create_job(job_data):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(status_code=500, detail="Failed to create job - database error")
+
+        if any(analysis != "multimodal" for analysis in analysis_values):
+            asyncio.create_task(process_video_analysis(job_id))
+
+        if "multimodal" in analysis_values:
+            asyncio.create_task(process_twelvelabs_upload(job_id))
+
+        return AnalysisResponse(
+            job_id=job_id,
+            status="processing",
+            results=None,
+            twelve_labs_video_id=None,
+            twelve_labs_index_id=None,
+            indexing_status=None,
+            indexing_progress=None,
+            source_url=request.url,
+            source_metadata=source_metadata,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Error processing reel URL: {str(e)}")
+
+
 @app.get("/analyze/{job_id}", response_model=AnalysisResponse)
 async def get_analysis_status(job_id: str):
     """
@@ -202,7 +290,9 @@ async def get_analysis_status(job_id: str):
         twelve_labs_video_id=job.get("twelve_labs_video_id"),
         twelve_labs_index_id=job.get("twelve_labs_index_id"),
         indexing_status=job.get("indexing_status"),
-        indexing_progress=job.get("indexing_progress")
+        indexing_progress=job.get("indexing_progress"),
+        source_url=job.get("source_url"),
+        source_metadata=job.get("source_metadata"),
     )
 
 async def process_video_analysis(job_id: str):
@@ -216,11 +306,13 @@ async def process_video_analysis(job_id: str):
 
     job = {
         "video_path": job_data["video_path"],
-        "analyses": job_data["analyses"]
+        "analyses": job_data["analyses"],
+        "source_metadata": job_data.get("source_metadata"),
     }
 
     try:
         video_path = str(job["video_path"])
+        source_metadata = job.get("source_metadata")
         # Handle both string arrays and AnalysisType enum arrays
         if isinstance(job["analyses"][0], str):
             analysis_types = job["analyses"]
@@ -249,6 +341,7 @@ async def process_video_analysis(job_id: str):
                 job_manager,
                 results_manager,
                 job_id,
+                source_metadata,
             )
         )
 
@@ -378,6 +471,7 @@ async def root():
         "version": "1.0.0",
         "endpoints": {
             "POST /analyze": "Upload video and start analysis",
+            "POST /analyze/url": "Download an Instagram reel from a URL and start analysis",
             "GET /analyze/{job_id}": "Get analysis status and results",
             "DELETE /analyze/{job_id}": "Cancel analysis job",
             "GET /health": "Health check"

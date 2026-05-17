@@ -126,6 +126,7 @@ transformers==4.48.2
 triton==2.2.0; platform_system == "Linux"
 google-genai==1.14.0
 twelvelabs>=1.0.0,<2.0.0
+yt-dlp
 typer==0.15.1
 typing_extensions==4.12.2
 urllib3==2.3.0

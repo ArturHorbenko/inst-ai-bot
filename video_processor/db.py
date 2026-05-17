@@ -29,6 +29,10 @@ class JobDocument(BaseModel):
     indexing_progress: Optional[float] = None  # 0.0 to 1.0
     indexing_start_time: Optional[datetime] = None
     indexing_end_time: Optional[datetime] = None
+    # Set when the video was fetched from a remote URL (e.g. Instagram reel)
+    source_url: Optional[str] = None
+    # Metadata captured from the source (caption, hashtags, uploader, etc.)
+    source_metadata: Optional[Dict[str, Any]] = None
 
 class ResultDocument(BaseModel):
     job_id: str
@@ -118,6 +122,8 @@ class JobManager:
                 temp_dir=job_data["temp_dir"],
                 video_path=job_data["video_path"],
                 analyses=job_data["analyses"],
+                source_url=job_data.get("source_url"),
+                source_metadata=job_data.get("source_metadata"),
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
                 processing_start_time=datetime.utcnow()

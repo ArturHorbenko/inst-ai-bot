@@ -605,10 +605,60 @@ NOW ANALYZE THE PROVIDED REEL.
 - Return ONLY the JSON object, no preamble or explanation"""
 
 
-def _build_gemini_prompt(transcript: list = None) -> str:
-    """Build the Gemini prompt, optionally injecting a Whisper transcript."""
-    if not transcript:
+def _build_gemini_prompt(transcript: list = None, caption: Optional[str] = None, hashtags: Optional[list] = None, comments: Optional[list] = None) -> str:
+    """Build the Gemini prompt, optionally injecting a Whisper transcript, post caption, and top comments."""
+    if not transcript and not caption and not hashtags and not comments:
         return _GEMINI_BASE_PROMPT
+
+    caption_block = ""
+    if caption or hashtags:
+        hashtag_line = ""
+        if hashtags:
+            hashtag_line = "\nHashtags: " + " ".join(f"#{h.lstrip('#')}" for h in hashtags) + "\n"
+        caption_block = (
+            "\n═══════════════════════════════════════════════════════════\n"
+            "CREATOR-PROVIDED CAPTION & HASHTAGS (from the Instagram post)\n"
+            "═══════════════════════════════════════════════════════════\n"
+            f"Caption: {caption or '(none)'}\n"
+            f"{hashtag_line}"
+            "\nUse this caption + hashtags as a strong hint when identifying:\n"
+            "- cultural_reference (trending audio, meme format, song/movie source)\n"
+            "- content_type and topic\n"
+            "- what_its_satirizing — creators often name the target directly in the caption.\n"
+            "The creator's own words are the most reliable source for naming the trend/audio.\n"
+            "Do NOT copy the caption verbatim into any VO or on_screen_text field — it is metadata about the post, not content shown in the video.\n"
+        )
+
+    comments_block = ""
+    if comments:
+        comment_lines = []
+        for c in comments:
+            author = c.get("author") or "unknown"
+            text = (c.get("text") or "").strip().replace("\n", " ")
+            if not text:
+                continue
+            if len(text) > 300:
+                text = text[:300] + "…"
+            comment_lines.append(f"- @{author}: {text}")
+        if comment_lines:
+            comments_block = (
+                "\n═══════════════════════════════════════════════════════════\n"
+                "TOP COMMENTS (from viewers of this post)\n"
+                "═══════════════════════════════════════════════════════════\n"
+                + "\n".join(comment_lines) + "\n"
+                "\nUse comments as secondary context, weaker than the caption but useful when:\n"
+                "- viewers name the audio/song/movie/trend the creator riffed on\n"
+                "- viewers describe what's being satirized in plain terms\n"
+                "- they confirm or contradict your read of the meme\n"
+                "Comments are often noisy (emojis, inside jokes, off-topic). Ignore the noise; surface the signal.\n"
+                "Do NOT copy any comment verbatim into VO or on_screen_text fields — comments are external metadata, not content shown in the video.\n"
+            )
+
+    if not transcript:
+        return _GEMINI_BASE_PROMPT.replace(
+            "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL.",
+            caption_block + comments_block + "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL."
+        )
 
     lines = "\n".join(
         f"[{seg['start']}s\u2013{seg['end']}s]: \"{seg['text'].strip()}\""
@@ -627,11 +677,11 @@ def _build_gemini_prompt(transcript: list = None) -> str:
     )
     return _GEMINI_BASE_PROMPT.replace(
         "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL.",
-        transcript_block + "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL."
+        caption_block + comments_block + transcript_block + "\n═══════════════════════════════════════════════════════════\nNOW ANALYZE THE PROVIDED REEL."
     )
 
 
-def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None) -> Dict[str, Any]:
+def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None, caption: Optional[str] = None, hashtags: Optional[list] = None, comments: Optional[list] = None) -> Dict[str, Any]:
     """
     Analyze a video using Google Gemini.
     Uploads the video, sends it with the prompt, and returns structured JSON.
@@ -640,6 +690,9 @@ def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None)
         api_key: Google Gemini API key
         video_path: Path to video file
         transcript: Optional Whisper transcript [{start, end, text}, ...] to inject into prompt
+        caption: Optional creator-supplied caption (Instagram post description) to use as context
+        hashtags: Optional list of hashtags from the post
+        comments: Optional list of {author, text, ...} dicts (top viewer comments) to use as secondary context
 
     Returns:
         Dict containing analysis results with status and summary
@@ -666,7 +719,7 @@ def analyze_video_gemini(api_key: str, video_path: str, transcript: list = None)
     if video_file.state.name != "ACTIVE":
         raise RuntimeError(f"Gemini file entered unexpected state: {video_file.state.name}")
 
-    gemini_prompt = _build_gemini_prompt(transcript)
+    gemini_prompt = _build_gemini_prompt(transcript, caption=caption, hashtags=hashtags, comments=comments)
 
     logger.info("Generating Gemini analysis...")
     response = client.models.generate_content(

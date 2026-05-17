@@ -37,6 +37,7 @@ lib64/
 temp/
 reels/
 scenes/
+secrets/
 yolo11n.pt
 yolo11x.pt
 yolov8n.pt
