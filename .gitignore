@@ -33,6 +33,9 @@ develop-eggs/
 lib/
 lib64/
 
+# Claude Code (per-user state — skills are versioned, local settings are not)
+.claude/settings.local.json
+
 # Project specific
 temp/
 reels/
