@@ -13,8 +13,10 @@ Run a niche-adaptation pass on an Instagram reel using the local `inst-ai-bot` H
 2. Run the bundled script:
 
    ```bash
-   python3 .claude/skills/adapt-reel/scripts/adapt.py "<reel-url>"
+   python3 scripts/adapt.py "<reel-url>"
    ```
+
+   Run from the skill folder. If invoked from elsewhere, prefix with the skill's path (e.g. `python3 skills/adapt-reel/scripts/adapt.py "<reel-url>"`).
 
 3. Show the script's stdout to the user as the adaptation output. Surface any `ERROR:` line directly — don't retry blindly.
 

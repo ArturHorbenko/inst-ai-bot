@@ -13,8 +13,10 @@ Run an opinionated creator-feedback pass on an Instagram reel using the local `i
 2. Run the bundled script:
 
    ```bash
-   python3 .claude/skills/grill-reel/scripts/grill.py "<reel-url>"
+   python3 scripts/grill.py "<reel-url>"
    ```
+
+   Run from the skill folder. If invoked from elsewhere, prefix with the skill's path (e.g. `python3 skills/grill-reel/scripts/grill.py "<reel-url>"`).
 
 3. Show the script's stdout to the user as the grill output. Surface any `ERROR:` line directly — don't retry blindly.
 
