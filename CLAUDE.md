@@ -4,140 +4,138 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a video processing system that analyzes video content using computer vision and AI. The system processes video files to extract scenes, perform OCR, generate captions, and create structured summaries using multimodal AI.
+A compute primitive for video analysis. Index videos once (download + Whisper transcription), then run opaque prompts against them via multimodal models. Agent workflows live in separate skill files — this repo is only the HTTP API.
+
+See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See `docs/adr/` for architecture decisions.
 
 ## Key Commands
 
 ### Python Environment
 - `source venv/bin/activate` - Activate virtual environment
 - `pip install -r requirements.txt` - Install Python dependencies
-- `python main.py` - Run the main video processing pipeline (legacy)
 
-### HTTP Server (Primary Interface)
+### HTTP Server
 - `python -m fastapi dev server.py` - Start development server on localhost:8000
 - `python -m fastapi run server.py` - Start production server
-- `python test_server.py` - Run server integration tests
 
-### Node.js (minimal usage)
-- `npm install` - Install Node.js dependencies (minimal usage)
+### Full Stack
+- `npm run dev` - Start backend (port 8000) + frontend (port 3000) concurrently
+- `npm run dev:frontend` / `npm run dev:backend` - Start individually
 
 ## Project Structure
 
-### Repository Layout
 ```
 /
-├── web/                  # Next.js frontend application
-│   ├── src/
-│   │   ├── app/         # Next.js App Router pages
-│   │   ├── components/  # React components
-│   │   └── lib/         # API client and utilities
-│   └── package.json     # Frontend dependencies
-├── video_processor/      # Python video processing modules
-├── server.py            # FastAPI backend server
-├── requirements.txt     # Python dependencies
-├── package.json         # Workspace configuration
-└── CLAUDE.md           # This file
+├── web/                      # Next.js frontend (read-only log view)
+├── video_processor/
+│   ├── config.py             # Config dataclass + env loading
+│   ├── store.py              # MongoDB: ArtifactStore, RunsStore, UrlCacheStore
+│   ├── indexer.py            # index_video() — download + hash + transcribe
+│   ├── runner.py             # run_prompt() — route prompt to model provider
+│   ├── gemini.py             # Gemini Files API caller (upload + reuse cached ref)
+│   ├── transcription.py      # Groq Whisper wrapper
+│   └── downloader.py         # yt-dlp Instagram reel downloader
+├── server.py                 # FastAPI server — 7 endpoints
+├── CONTEXT.md                # Domain glossary
+└── docs/adr/                 # Architecture decision records
 ```
 
-### Workspace Configuration
-- **Root**: npm workspace with scripts for full-stack development
-- **Frontend**: Next.js app in `web/` directory
-- **Backend**: Python FastAPI server with video processing pipeline
-- **CORS**: Configured for local development (frontend ↔ backend)
+## API
 
-## Architecture
+All endpoints are synchronous. FastAPI runs sync handlers in a thread pool automatically.
 
-### HTTP API Server (`server.py`)
-FastAPI-based REST server that provides modular video analysis via HTTP endpoints:
-- **POST /analyze** - Upload video and request specific analysis types
-- **GET /analyze/{job_id}** - Check analysis status and retrieve results
-- **DELETE /analyze/{job_id}** - Cancel analysis and cleanup files
-- **GET /health** - Server health check
-- **GET /** - API documentation and supported analysis types
+### Artifacts
 
-### Analysis Types
-- `multimodal` - Comprehensive analysis using TwelveLabs API
-- `scene_detection` - Extract key frames and timestamps
-- `transcription` - Audio-to-text using Whisper
-- `ocr` - Text extraction from scenes
-- `captioning` - AI-powered scene descriptions
-- `matching` - Align transcription with visual scenes
-- `structured_summary` - Generate searchable summaries
-- `full_pipeline` - Complete processing pipeline
+**`POST /artifacts`** — Index a video from a URL. Idempotent by content hash.
+```json
+// Request
+{ "url": "https://www.instagram.com/reel/..." }
 
-### Core Processing Pipeline (`main.py` - Legacy)
-The original pipeline orchestrates video processing through these steps:
-1. Scene detection and extraction (`scene_detect.py`)
-2. OCR processing on extracted frames (`ocr.py`) 
-3. AI-powered scene description generation (`captioning.py`)
-4. Audio transcription extraction (`transcription.py`)
-5. Matching transcriptions to visual scenes (`matching.py`)
-6. Structured summarization (`summarizer.py`)
-7. Multimodal AI summary generation (`multimodal.py`)
+// Response — Artifact
+{
+  "content_hash": "sha256:abc123...",
+  "video_file_ref": "videos/sha256:abc123....mp4",
+  "duration_sec": 42.1,
+  "transcript": {
+    "text": "full transcript text",
+    "segments": [{"start": 0.0, "end": 2.5, "text": "..."}],
+    "model": "whisper-large-v3-groq"
+  },
+  "sources": [
+    {
+      "type": "instagram_reel",
+      "url": "https://...",
+      "fetched_at": "...",
+      "fetcher": "yt-dlp",
+      "metadata": { "caption": "...", "comments": [...] }
+    }
+  ],
+  "gemini_file_ref": null,
+  "indexed_at": "...",
+  "schema_version": 1
+}
+```
 
-### Video Processor Module (`video_processor/`)
-- `config.py` - Configuration management using dataclasses and environment variables
-- `db.py` - MongoDB connection and operations
-- `scene_detect.py` - Video scene detection and frame extraction
-- `ocr.py` - OCR processing using EasyOCR/PaddleOCR
-- `captioning.py` - AI-powered scene description generation
-- `transcription.py` - Audio transcription using Whisper
-- `matching.py` - Matches transcription timestamps to visual scenes
-- `summarizer.py` - Creates structured summaries from processed scenes
-- `multimodal.py` - Generates comprehensive summaries using TwelveLabs API
+**`POST /artifacts/upload`** — Index an uploaded video file. Multipart form, field `video`.
 
-### Data Flow
-- Videos stored in `reels/` directory
-- Extracted scene images saved to `scenes/` directory  
-- Scene data and summaries stored in MongoDB database
-- Prompts for AI processing stored in `prompts/` directory
+**`GET /artifacts`** — List all artifacts (sorted by `indexed_at` desc).
 
-### Configuration
-Environment variables are loaded via `.env` file:
-- `VIDEO_PATH` - Path to video file to process
-- `VIDEO_ID` - Unique identifier for video
-- `IMAGE_DIR` - Directory for extracted scene images
-- `MONGODB_URI` - MongoDB connection string
-- `MONGODB_DB` - MongoDB database name
-- `OPENAI_API_KEY` - OpenAI API key for AI processing
-- `TWELVE_LABS_API_KEY` - TwelveLabs API key for multimodal processing
+**`GET /artifacts/{content_hash}`** — Get a single artifact by content hash.
 
-### Key Dependencies
-- **FastAPI** - HTTP server framework with automatic API documentation
-- **Uvicorn** - ASGI server for running FastAPI applications
-- OpenCV for video processing
-- EasyOCR/PaddleOCR for text extraction
-- OpenAI for AI-powered descriptions
-- TwelveLabs for multimodal video analysis
-- MongoDB for data persistence
-- PySceneDetect for scene boundary detection
+### Runs
 
-### Development Workflow
+**`POST /runs`** — Run an opaque prompt against an indexed artifact.
+```json
+// Request
+{
+  "artifact": "sha256:abc123...",
+  "prompt": "What is the hook of this video?",
+  "model": "google/gemini-2.5-pro",   // provider/model-id format
+  "label": "hook-extraction"           // optional tag for UI grouping
+}
 
-#### Backend Only
-1. Start server: `source venv/bin/activate && python -m fastapi dev server.py`
-2. Access API docs: `http://localhost:8000/docs` (Swagger UI)
-3. Test endpoints: Use `test_server.py` or curl commands
-4. Upload videos via POST to `/analyze` with analysis type specification
+// Response — Run
+{
+  "run_id": "uuid",
+  "artifact_hash": "sha256:abc123...",
+  "prompt": "What is the hook of this video?",
+  "model": "google/gemini-2.5-pro",
+  "label": "hook-extraction",
+  "output": "The hook is...",
+  "created_at": "..."
+}
+```
 
-#### Full Stack Development (Backend + Frontend)
-1. **Start both services**: `npm run dev` (runs backend and frontend concurrently)
-   - Backend: FastAPI server on `http://localhost:8000`
-   - Frontend: Next.js app on `http://localhost:3000`
-2. **Frontend only**: `npm run dev:frontend`
-3. **Backend only**: `npm run dev:backend`
-4. **Build frontend**: `npm run build:frontend`
-5. **Test backend**: `npm run test:backend`
+**`GET /runs?artifact={hash}`** — List runs, optionally filtered by artifact hash.
 
-#### Frontend Architecture
-- **Next.js 14** with App Router and TypeScript
-- **TanStack Query** for API state management with 1-second polling
-- **Tailwind CSS** for styling
-- **Components**:
-  - `VideoUpload` - Drag-and-drop file upload with analysis selection
-  - `JobStatus` - Real-time job monitoring with progress indicators
-  - `ResultsViewer` - Structured display of analysis results
-- **API Integration**: TypeScript client with full type safety
+**`GET /runs/{run_id}`** — Get a single run by ID.
+
+### Health
+
+**`GET /health`** — `{"status": "healthy", "version": "2.0.0"}`
+
+## Configuration
+
+Environment variables via `.env`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `MONGODB_URI` | `mongodb://localhost:27017/` | MongoDB connection string |
+| `MONGODB_DB` | `creator-kb` | Database name |
+| `VIDEO_DIR` | `videos` | Local directory for video files (keyed by content hash) |
+| `GEMINI_API_KEY` | — | Google Gemini API key |
+| `GROQ_API_KEY` | — | Groq API key (Whisper transcription) |
+| `OPENAI_API_KEY` | — | OpenAI key (reserved for future provider) |
+| `TWELVE_LABS_API_KEY` | — | TwelveLabs key (reserved for future provider) |
+| `SUPPORTED_VIDEO_FORMATS` | `mp4,mov,avi,mkv,webm,m4v` | Accepted upload formats |
+
+## Architecture Notes
+
+- **Indexing is light**: only Whisper transcription at index time. Visual analysis happens at run time via multimodal model prompt.
+- **Gemini file caching**: `gemini_file_ref` stored on artifact; reused across runs if still ACTIVE (avoids re-upload on every prompt iteration).
+- **Model routing**: `model` field uses `provider/model-id` format (`google/gemini-2.5-pro`). Runner splits on `/` to dispatch to the right SDK. Currently only `google` is implemented.
+- **Idempotent indexing**: content-addressed by SHA-256. Re-indexing the same URL or file returns the existing artifact. New source URLs are appended to `sources[]`.
+- **MongoDB collections**: `artifacts`, `runs`, `url_cache`. `url_cache` maps URL → content_hash to skip re-downloads.
 
 ## Code Style Guidelines
 
@@ -166,3 +164,17 @@ Environment variables are loaded via `.env` file:
 - Log errors with sufficient context for debugging
 - Fail fast and provide clear error messages
 - Implement graceful degradation where appropriate
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues on `ArturHorbenko/inst-ai-bot`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
