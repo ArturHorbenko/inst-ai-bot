@@ -4,15 +4,18 @@ Adapt an Instagram reel to the user's niche (tech lifestyle humor, relatable):
 index it via the local inst-ai-bot API, then run an adaptation prompt against
 the artifact. Prints the remix plan to stdout.
 
-Usage: adapt.py <instagram-reel-url> [--server http://localhost:8000]
+Usage: adapt.py <instagram-reel-url> [--server URL]
+
+Server URL precedence: --server flag > $INST_AI_BOT_URL > http://localhost:8000.
 """
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_SERVER = "http://localhost:8000"
+DEFAULT_SERVER = os.environ.get("INST_AI_BOT_URL", "http://localhost:8000")
 RUN_LABEL = "adapt"
 RUN_MODEL = "google/gemini-2.5-pro"
 

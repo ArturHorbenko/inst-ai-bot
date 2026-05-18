@@ -2,7 +2,13 @@
 
 Portable Claude skills that drive the `inst-ai-bot` HTTP API. Each folder follows Anthropic's [skill format](https://support.claude.com/en/articles/12512198-how-to-create-custom-skills): a `SKILL.md` with `name` + `description` frontmatter and a `scripts/` subdir.
 
-All skills assume the local `inst-ai-bot` server is running at `http://localhost:8000`. Pass `--server` to point at a different host.
+All skills talk to an `inst-ai-bot` server. The URL is resolved in this order:
+
+1. `--server URL` CLI flag
+2. `$INST_AI_BOT_URL` environment variable
+3. `http://localhost:8000` (default)
+
+The server has no auth — only point skills at a URL that's protected at the network layer (localhost, Tailscale, VPN). Don't expose it to the public internet without first adding an auth layer.
 
 ## Available skills
 
@@ -39,6 +45,29 @@ The zip contains the skill folder at its root, as Anthropic requires.
 ### Hermes (custom agent)
 
 TBD — installer will land once the tool-registration interface is settled.
+
+## Remote server via Tailscale
+
+To run the skills from a host that isn't the one running `inst-ai-bot` (e.g. Claude Desktop on your laptop, server on your home box):
+
+1. Install Tailscale on both machines and put them on the same tailnet.
+2. Find the server's MagicDNS hostname (e.g. `pi.tail-abc123.ts.net`) — `tailscale status` lists it.
+3. Set `INST_AI_BOT_URL` in the environment where the skill runs:
+
+   ```bash
+   export INST_AI_BOT_URL="http://pi.tail-abc123.ts.net:8000"
+   ```
+
+   For Claude Desktop / GUI hosts, set the env var system-wide (macOS: `launchctl setenv`; Linux: in your shell rc or systemd user unit).
+
+4. Optional: front the server with `tailscale serve` to get an HTTPS URL on 443 — easier for hosts that prefer `https://...`:
+
+   ```bash
+   tailscale serve --bg http://localhost:8000
+   # → https://pi.tail-abc123.ts.net
+   ```
+
+Skills fall back to `http://localhost:8000` when `INST_AI_BOT_URL` is unset, so the same skill works locally and remotely with no code changes.
 
 ## Adding a new skill
 

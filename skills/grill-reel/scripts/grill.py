@@ -4,15 +4,18 @@ Grill an Instagram reel: index it via the local inst-ai-bot API, then run an
 opinionated creator-feedback prompt against the artifact. Prints the grill
 output to stdout.
 
-Usage: grill.py <instagram-reel-url> [--server http://localhost:8000]
+Usage: grill.py <instagram-reel-url> [--server URL]
+
+Server URL precedence: --server flag > $INST_AI_BOT_URL > http://localhost:8000.
 """
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
-DEFAULT_SERVER = "http://localhost:8000"
+DEFAULT_SERVER = os.environ.get("INST_AI_BOT_URL", "http://localhost:8000")
 RUN_LABEL = "grill"
 RUN_MODEL = "google/gemini-2.5-pro"
 
