@@ -6,7 +6,8 @@ the artifact. Prints the remix plan to stdout.
 
 Usage: adapt.py <instagram-reel-url> [--server URL]
 
-Server URL precedence: --server flag > $INST_AI_BOT_URL > http://localhost:8000.
+Server URL precedence: --server flag > $INST_AI_BOT_URL > .env in the skill
+folder > http://localhost:8000.
 """
 import argparse
 import json
@@ -14,7 +15,22 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
+
+def _load_dotenv() -> None:
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+_load_dotenv()
 DEFAULT_SERVER = os.environ.get("INST_AI_BOT_URL", "http://localhost:8000")
 RUN_LABEL = "adapt"
 RUN_MODEL = "google/gemini-2.5-pro"

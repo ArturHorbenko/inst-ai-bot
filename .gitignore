@@ -39,6 +39,9 @@ lib64/
 # Skill zip packages (build output of skills/package.sh)
 skills/dist/
 
+# Per-skill .env files (may contain personal Tailscale URLs etc.) — .env.example is committed
+skills/*/.env
+
 # Project specific
 temp/
 reels/

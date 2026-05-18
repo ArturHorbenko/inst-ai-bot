@@ -6,7 +6,8 @@ All skills talk to an `inst-ai-bot` server. The URL is resolved in this order:
 
 1. `--server URL` CLI flag
 2. `$INST_AI_BOT_URL` environment variable
-3. `http://localhost:8000` (default)
+3. `INST_AI_BOT_URL=...` in a `.env` file at the skill folder root (next to `SKILL.md`)
+4. `http://localhost:8000` (default)
 
 The server has no auth — only point skills at a URL that's protected at the network layer (localhost, Tailscale, VPN). Don't expose it to the public internet without first adding an auth layer.
 
@@ -33,14 +34,16 @@ ln -s "$(pwd)/skills/adapt-reel" ~/.claude/skills/adapt-reel
 
 ### Claude Desktop / Claude API
 
-Package the skill as a zip and upload via the skills UI / API:
+The skill sandbox likely won't inherit env vars from your machine, so configure the server URL via a `.env` file inside the skill folder before zipping:
 
 ```bash
-./skills/package.sh adapt-reel       # writes dist/adapt-reel.zip
+cp skills/adapt-reel/.env.example skills/adapt-reel/.env
+# edit skills/adapt-reel/.env → INST_AI_BOT_URL=http://your-tailnet.ts.net:8000
+./skills/package.sh adapt-reel       # writes dist/adapt-reel.zip with .env bundled
 ./skills/package.sh --all            # packages every skill
 ```
 
-The zip contains the skill folder at its root, as Anthropic requires.
+The zip contains the skill folder at its root (matching Anthropic's spec) and your `.env` rides along. `skills/*/.env` is gitignored so your Tailscale URL stays out of the repo.
 
 ### Hermes (custom agent)
 
