@@ -1,45 +1,82 @@
 ---
 name: grill-reel
-description: Grill an Instagram reel — index it via the local inst-ai-bot API (caption, transcript, top comments), then deliver direct creator-focused feedback on hook, pacing, audience reaction, and what to change next time. Use when the user wants to grill a reel, review their short-form video, get creator feedback on an Instagram URL, or asks "what would make this reel better".
+description: Grill an Instagram reel — index it via the inst-ai-bot MCP server (caption, transcript, top comments), then deliver direct creator-focused feedback on hook, pacing, audience reaction, and what to change next time. Use when the user wants to grill a reel, review their short-form video, get creator feedback on an Instagram URL, or asks "what would make this reel better".
 ---
 
 # grill-reel
 
-Run an opinionated creator-feedback pass on an Instagram reel using the local `inst-ai-bot` HTTP API.
+Run an opinionated creator-feedback pass on an Instagram reel by calling the `inst-ai-bot` MCP server.
 
 ## Quick start
 
 1. Confirm the user supplied an Instagram reel URL (`instagram.com/reel/...` or `/p/...`). If not, ask for one.
-2. Run the bundled script:
 
-   ```bash
-   python3 scripts/grill.py "<reel-url>"
-   ```
+2. Call MCP tool **`inst-ai-bot.index_video_from_url`** with `{"url": "<reel-url>"}`. It returns `{content_hash, transcript_text, caption, hashtags, uploader, comments, ...}`. Idempotent — fast on a re-grill.
 
-   Run from the skill folder. If invoked from elsewhere, prefix with the skill's path (e.g. `python3 skills/grill-reel/scripts/grill.py "<reel-url>"`).
+3. Format `comments` as a numbered list (see "Comment formatting" below) and `hashtags` as a comma-joined string. Fill the template in "Prompt template" with the returned fields.
 
-3. Show the script's stdout to the user as the grill output. Surface any `ERROR:` line directly — don't retry blindly.
+4. Call MCP tool **`inst-ai-bot.run_prompt`** with:
+   - `artifact_hash`: the `content_hash` from step 2
+   - `prompt`: the filled template from step 3
+   - `model`: `"google/gemini-2.5-pro"`
+   - `label`: `"grill"`
 
-## What the script does
-
-- Hits `GET /health` to verify the server is up. Fails with a clear instruction if not.
-- `POST /artifacts {url}` — indexes the reel (idempotent; fast on a re-grill).
-- Extracts caption, hashtags, uploader, and the top scraped comments from the artifact.
-- `POST /runs` with a hard-coded grill prompt that embeds the post metadata + transcript and instructs Gemini to watch the video and deliver feedback in four sections: Hook, Pacing & retention, Audience signal, Improve list.
-- Prints the run output to stdout. Logs progress to stderr.
+5. Show the `output` field from the response to the user as the grill output. Don't paraphrase. Surface any error from the MCP tool call directly.
 
 ## Assumptions
 
-- The `inst-ai-bot` server is running at `http://localhost:8000`. If it isn't, the script fails with a hint to run `npm run dev:backend`. Do **not** attempt to start the server yourself.
-- `GEMINI_API_KEY` and `GROQ_API_KEY` are configured in the repo's `.env`.
+- The `inst-ai-bot` MCP server is configured in this Claude host (see `skills/README.md` for per-host setup). If the MCP tools aren't available, tell the user — do **not** try to start a server or fall back to anything else.
+- `GEMINI_API_KEY` and `GROQ_API_KEY` live in the server's `.env`. Skill-side has no secrets.
 
 ## Customizing
 
-- Different server URL: pass `--server http://host:port`.
-- Different grilling angle (e.g. only hook critique, or B2B vs lifestyle framing): edit `GRILL_PROMPT_TEMPLATE` in `scripts/grill.py`. The script is the source of truth for the prompt — don't paraphrase it elsewhere.
+- **Different grilling angle** (e.g. hook-only critique, B2B vs lifestyle framing): edit the "Prompt template" block below.
+- **Different model**: pass a different `model` to `run_prompt`. Only the `google` provider is wired today.
+
+## Comment formatting
+
+Comments come back as a list of `{author, text, like_count}` dicts. Render them as:
+
+```
+1. @author [N likes]: text on one line
+2. @author2: another comment
+```
+
+If `comments` is empty or missing, write `(none scraped — either disabled, or the post has no comments)`.
+
+If `caption` is empty, use `(no caption)`. Same fallback shape for `hashtags` → `(none)` and `uploader` → `(unknown)`.
+
+## Prompt template
+
+Use this prompt verbatim, replacing `{placeholders}` with the values from step 2 (formatted per "Comment formatting"):
+
+```
+You are reviewing an Instagram reel as a senior short-form video creator. Your job is to tell this creator, directly and specifically, what they could do better next time.
+
+CONTEXT FROM THE POST
+Caption: {caption}
+Hashtags: {hashtags}
+Uploader: {uploader}
+
+TOP COMMENTS (what the audience actually said — read them honestly)
+{comments_block}
+
+TRANSCRIPT (what was said in the video)
+{transcript}
+
+Now watch the video itself, then deliver feedback in these sections:
+
+1. **Hook (0–3s)** — Does the opener earn the watch? What would make it stronger? Be specific about the frame, line, or cut you would change.
+2. **Pacing & retention** — Where will viewers drop off? Which beats drag? Which land?
+3. **Audience signal** — What do the comments reveal about how this landed (hooked, confused, off-topic, hostile, missing the point)? Quote a comment if it sharpens the point.
+4. **The improve list** — 3 to 5 concrete edits the creator should try next time. No platitudes like "post more consistently". Specific changes: "cut the intro line, open on the X frame", "add a B-roll insert at ~0:08", "the CTA at the end is too soft — try Y instead".
+
+Be direct. Don't pad. If something is genuinely good, say so in one line and move on. Total length: aim for tight, not exhaustive.
+```
 
 ## What this skill does NOT do
 
-- Doesn't start, restart, or check the dev server lifecycle. Assume running.
-- Doesn't analyze non-Instagram URLs (TikTok, YouTube). The downloader rejects them.
-- Doesn't follow up with additional runs. One reel → one grill output. If the user wants a second angle, run it again with a different prompt (or extend the script).
+- Doesn't propose remixes or adaptations. That's `/adapt-reel`.
+- Doesn't start, restart, or check any server lifecycle. The MCP connector either works or it doesn't — report cleanly and stop.
+- Doesn't analyze non-Instagram URLs (TikTok, YouTube). The indexer rejects them.
+- Doesn't follow up with additional runs. One reel → one grill output. If the user wants a second angle, run it again with a different prompt.

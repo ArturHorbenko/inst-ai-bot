@@ -1,11 +1,17 @@
+import os
+import secrets
 import shutil
 import tempfile
+import threading
+import time
 import logging
+from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Deque, Dict, Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from video_processor.config import get_config, validate_video_format
@@ -25,6 +31,59 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()
+if API_KEY:
+    logger.info("API key auth: ENABLED (header X-API-Key required on all routes except /health)")
+else:
+    logger.warning("API key auth: DISABLED (set INST_AI_BOT_API_KEY to require X-API-Key)")
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None)) -> None:
+    if not API_KEY:
+        return
+    if not x_api_key or not secrets.compare_digest(x_api_key, API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+
+
+RATE_LIMIT_PER_MIN = int(os.environ.get("INST_AI_BOT_RATE_LIMIT_PER_MIN", "120") or "0")
+RATE_WINDOW_SEC = 60
+_rate_buckets: Dict[str, Deque[float]] = {}
+_rate_lock = threading.Lock()
+
+if RATE_LIMIT_PER_MIN > 0:
+    logger.info(f"Rate limit: {RATE_LIMIT_PER_MIN} req / {RATE_WINDOW_SEC}s per client IP (per worker)")
+else:
+    logger.warning("Rate limit: DISABLED (set INST_AI_BOT_RATE_LIMIT_PER_MIN > 0 to enable)")
+
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if RATE_LIMIT_PER_MIN <= 0:
+        return await call_next(request)
+    ip = _client_ip(request)
+    now = time.monotonic()
+    cutoff = now - RATE_WINDOW_SEC
+    with _rate_lock:
+        bucket = _rate_buckets.setdefault(ip, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= RATE_LIMIT_PER_MIN:
+            retry_after = int(RATE_WINDOW_SEC - (now - bucket[0])) + 1
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Rate limit exceeded"},
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+    return await call_next(request)
 
 config = get_config()
 db_connection = DatabaseConnection(config)
@@ -55,7 +114,7 @@ class IndexUrlRequest(BaseModel):
     url: str
 
 
-@app.post("/artifacts")
+@app.post("/artifacts", dependencies=[Depends(require_api_key)])
 def create_artifact_from_url(request: IndexUrlRequest):
     """Index a video from a URL. Idempotent — returns existing artifact if already indexed."""
     try:
@@ -66,7 +125,7 @@ def create_artifact_from_url(request: IndexUrlRequest):
         raise HTTPException(status_code=422, detail=str(e))
 
 
-@app.post("/artifacts/upload")
+@app.post("/artifacts/upload", dependencies=[Depends(require_api_key)])
 def create_artifact_from_file(video: UploadFile = File(...)):
     """Index an uploaded video file. Idempotent — returns existing artifact if already indexed."""
     if not validate_video_format(video.filename, config):
@@ -84,12 +143,12 @@ def create_artifact_from_file(video: UploadFile = File(...)):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-@app.get("/artifacts")
+@app.get("/artifacts", dependencies=[Depends(require_api_key)])
 def list_artifacts():
     return artifact_store.list()
 
 
-@app.get("/artifacts/{content_hash:path}")
+@app.get("/artifacts/{content_hash:path}", dependencies=[Depends(require_api_key)])
 def get_artifact(content_hash: str):
     artifact = artifact_store.get_by_hash(content_hash)
     if not artifact:
@@ -106,7 +165,7 @@ class RunRequest(BaseModel):
     label: Optional[str] = None
 
 
-@app.post("/runs")
+@app.post("/runs", dependencies=[Depends(require_api_key)])
 def create_run(request: RunRequest):
     """Run an opaque prompt against an indexed artifact."""
     try:
@@ -128,12 +187,12 @@ def create_run(request: RunRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/runs")
+@app.get("/runs", dependencies=[Depends(require_api_key)])
 def list_runs(artifact: Optional[str] = None):
     return runs_store.list(artifact_hash=artifact)
 
 
-@app.get("/runs/{run_id}")
+@app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
 def get_run(run_id: str):
     run = runs_store.get(run_id)
     if not run:

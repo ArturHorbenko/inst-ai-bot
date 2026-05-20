@@ -4,6 +4,9 @@ node_modules/
 # Environment variables
 .env
 
+# Indexed video blobs (content-addressed, large; live on disk only)
+videos/
+
 # System files
 .DS_Store
 

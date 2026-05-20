@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A compute primitive for video analysis. Index videos once (download + Whisper transcription), then run opaque prompts against them via multimodal models. Agent workflows live in separate skill files — this repo is only the HTTP API.
 
-See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See `docs/adr/` for architecture decisions.
+See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See `docs/adr/` for architecture decisions. See `docs/infrastructure.md` for how the server actually runs on the host (systemd unit, Tailscale Funnel, auth, rate limit) — read this before assuming the server is launched manually.
 
 ## Key Commands
 
@@ -34,13 +34,23 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 │   ├── runner.py             # run_prompt() — route prompt to model provider
 │   ├── gemini.py             # Gemini Files API caller (upload + reuse cached ref)
 │   ├── transcription.py      # Groq Whisper wrapper
-│   └── downloader.py         # yt-dlp Instagram reel downloader
+│   ├── downloader.py         # yt-dlp Instagram reel downloader
+│   └── mcp_server.py         # FastMCP server exposing primitives to Claude hosts
+├── scripts/
+│   └── run_mcp.py            # MCP entrypoint (uvicorn on :8002, path /mcp)
 ├── server.py                 # FastAPI server — 7 endpoints
 ├── CONTEXT.md                # Domain glossary
 └── docs/adr/                 # Architecture decision records
 ```
 
 ## API
+
+Two parallel surfaces over the same MongoDB-backed core:
+
+- **FastAPI HTTP** (`server.py`, port 8001) — the 7 endpoints below; gated by `X-API-Key`. Used by the Next.js log viewer and any direct callers.
+- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — three tools: `index_video_from_url`, `run_prompt`, `get_artifact`. Streamable HTTP transport, gated by `Authorization: Bearer <key>` (same `INST_AI_BOT_API_KEY`). This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
+
+Both wrap the same `index_video` / `run_prompt` functions and write to the same `artifacts` and `runs` collections — runs created via MCP show up in `GET /runs`.
 
 All endpoints are synchronous. FastAPI runs sync handlers in a thread pool automatically.
 
@@ -128,6 +138,8 @@ Environment variables via `.env`:
 | `OPENAI_API_KEY` | — | OpenAI key (reserved for future provider) |
 | `TWELVE_LABS_API_KEY` | — | TwelveLabs key (reserved for future provider) |
 | `SUPPORTED_VIDEO_FORMATS` | `mp4,mov,avi,mkv,webm,m4v` | Accepted upload formats |
+| `INST_AI_BOT_API_KEY` | — | If set, every endpoint except `/health` requires header `X-API-Key: <value>` (401 otherwise). Unset = auth disabled. |
+| `INST_AI_BOT_RATE_LIMIT_PER_MIN` | `120` | Per-IP sliding-window rate limit (in-memory, per worker). Behind a proxy uses `X-Forwarded-For` for the real IP. Set to `0` to disable. |
 
 ## Architecture Notes
 
