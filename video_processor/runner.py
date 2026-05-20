@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .store import ArtifactStore, RunsStore
-from . import gemini as gemini_module
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +27,8 @@ def run_prompt(
     provider, model_id = _parse_model(model)
 
     if provider == "google":
+        from . import gemini as gemini_module
+
         output, file_ref = gemini_module.call_gemini(
             api_key=config.GEMINI_API_KEY,
             video_path=artifact["video_file_ref"],
@@ -37,8 +38,25 @@ def run_prompt(
         )
         if file_ref and file_ref != artifact.get("gemini_file_ref"):
             artifact_store.update_gemini_ref(artifact_hash, file_ref)
+    elif provider == "twelvelabs":
+        from . import twelvelabs as twelvelabs_module
+
+        output, video_id = twelvelabs_module.call_twelvelabs(
+            api_key=config.TWELVE_LABS_API_KEY,
+            video_path=artifact["video_file_ref"],
+            prompt=prompt,
+            model=model_id,
+            twelvelabs_video_id=artifact.get("twelvelabs_video_id"),
+            index_name=config.TWELVE_LABS_INDEX_NAME,
+            index_id=config.TWELVE_LABS_INDEX_ID,
+            poll_interval=config.INDEXING_POLL_INTERVAL,
+        )
+        if video_id and video_id != artifact.get("twelvelabs_video_id"):
+            artifact_store.update_twelvelabs_ref(artifact_hash, video_id)
     else:
-        raise NotImplementedError(f"Provider '{provider}' not yet supported. Implemented: google")
+        raise NotImplementedError(
+            f"Provider '{provider}' not yet supported. Implemented: google, twelvelabs"
+        )
 
     run = {
         "run_id": str(uuid.uuid4()),

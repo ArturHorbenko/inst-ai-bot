@@ -37,4 +37,4 @@ _Avoid_: Analysis, query, request
 
 ## Flagged ambiguities
 
-- The current code's `analyses` enum mixes "which model/backend" (`gemini`, `multimodal`=TwelveLabs) with "what you're asking it to do" (`format_extraction`, `structured`). In the new model these are two orthogonal axes: a **Run** picks a prompt AND a model independently.
+- Historical code had an `analyses` enum that mixed "which model/backend" (`gemini`, `multimodal`=TwelveLabs) with "what you're asking it to do" (`format_extraction`, `structured`). In the current Artifact/Run model these are orthogonal: a **Run** picks a prompt and a `provider/model-id` independently (`google/gemini-2.5-pro`, `twelvelabs/pegasus1.5`).

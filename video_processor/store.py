@@ -73,6 +73,12 @@ class ArtifactStore:
             {"$set": {"gemini_file_ref": gemini_file_ref}},
         )
 
+    def update_twelvelabs_ref(self, content_hash: str, twelvelabs_video_id: str):
+        self._col.update_one(
+            {"content_hash": content_hash},
+            {"$set": {"twelvelabs_video_id": twelvelabs_video_id}},
+        )
+
     def get_by_hash(self, content_hash: str) -> Optional[dict]:
         doc = self._col.find_one({"content_hash": content_hash})
         return _clean(doc) if doc else None

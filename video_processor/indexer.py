@@ -79,6 +79,7 @@ def index_video(
             },
             "sources": [_build_source(source if is_url else None, platform, source_metadata)],
             "gemini_file_ref": None,
+            "twelvelabs_video_id": None,
             "indexed_at": datetime.now(timezone.utc),
             "schema_version": 1,
         }

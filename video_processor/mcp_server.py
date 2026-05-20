@@ -110,9 +110,11 @@ def run_prompt(
     """Run an opaque multimodal prompt against an indexed artifact.
 
     `artifact_hash` must be a `content_hash` returned by `index_video_from_url`.
-    `model` uses `provider/model-id` format (e.g. `google/gemini-2.5-pro`); only
-    the `google` provider is wired today. `label` is an optional tag for grouping
-    runs in the log view. Returns `{run_id, output}`.
+    `model` uses `provider/model-id` format. Two providers are wired:
+    `google/gemini-2.5-pro` (default) and `twelvelabs/pegasus1.5`. To compare
+    providers, run the same prompt twice with different `model` values and one
+    shared `label` — both runs show up side by side in the log view. `label` is
+    an optional tag for grouping runs. Returns `{run_id, output}`.
     """
     _ensure_db()
     try:
