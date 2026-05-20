@@ -1,9 +1,10 @@
 """MCP server fronting the inst-ai-bot artifact/run primitives.
 
-Exposes three tools over Streamable HTTP:
+Exposes four tools over Streamable HTTP:
   - index_video_from_url(url)
   - run_prompt(artifact_hash, prompt, model?, label?)
   - get_artifact(content_hash)
+  - get_reel_insights(url)
 
 Auth: Bearer token in `Authorization: Bearer <key>`; must match
 `INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
@@ -24,8 +25,16 @@ from starlette.responses import JSONResponse
 
 from .config import get_config
 from .indexer import index_video
+from .insights import InsightsError, ReelNotOwned, get_reel_insights as get_reel_insights_impl
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
-from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
+from .store import (
+    ArtifactStore,
+    DatabaseConnection,
+    InsightsStore,
+    MetaCredentialsStore,
+    RunsStore,
+    UrlCacheStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +47,9 @@ mcp = FastMCP(
         "  1) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
         "  2) run_prompt(artifact_hash=content_hash, prompt=...) -> {output}\n\n"
         "Indexing is idempotent (content-hash addressed); re-calling index_video_from_url "
-        "with the same URL is a cheap cache hit."
+        "with the same URL is a cheap cache hit.\n\n"
+        "get_reel_insights(url) pulls real Instagram performance metrics for your own "
+        "reels (separate from indexing — no content hash needed)."
     ),
     host="0.0.0.0",
     port=8002,
@@ -51,10 +62,14 @@ _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
 _url_cache: Optional[UrlCacheStore] = None
+_insights_store: Optional[InsightsStore] = None
+_meta_creds: Optional[MetaCredentialsStore] = None
+
+_HISTORY_LIMIT = 10
 
 
 def _ensure_db() -> None:
-    global _artifact_store, _runs_store, _url_cache
+    global _artifact_store, _runs_store, _url_cache, _insights_store, _meta_creds
     if _artifact_store is not None:
         return
     if not _db.connect():
@@ -62,6 +77,8 @@ def _ensure_db() -> None:
     _artifact_store = ArtifactStore(_db.db)
     _runs_store = RunsStore(_db.db)
     _url_cache = UrlCacheStore(_db.db)
+    _insights_store = InsightsStore(_db.db)
+    _meta_creds = MetaCredentialsStore(_db.db)
 
 
 def _trim_artifact(artifact: dict) -> dict:
@@ -140,6 +157,53 @@ def get_artifact(content_hash: str) -> dict:
     if not artifact:
         raise ValueError(f"Artifact not found: {content_hash}")
     return _trim_artifact(artifact)
+
+
+def _iso(value):
+    """ISO-format a datetime; pass through anything already a string/None."""
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
+def _format_snapshot(snapshot: dict) -> dict:
+    """An insights snapshot with datetime fields made JSON-safe."""
+    return {
+        "media_id": snapshot["media_id"],
+        "shortcode": snapshot.get("shortcode"),
+        "permalink": snapshot.get("permalink"),
+        "media_product_type": snapshot.get("media_product_type"),
+        "caption": snapshot.get("caption"),
+        "posted_at": snapshot.get("posted_at"),
+        "metrics": snapshot.get("metrics") or {},
+        "fetched_at": _iso(snapshot.get("fetched_at")),
+    }
+
+
+@mcp.tool()
+def get_reel_insights(url: str) -> dict:
+    """Fetch Instagram performance metrics for one of your own reels.
+
+    Pass a reel URL (e.g. `https://www.instagram.com/reel/...`). Fetches fresh
+    numbers from the Instagram Graph API (views, reach, likes, comments, saved,
+    shares, total interactions, average watch time), stores an append-only
+    snapshot, and returns the latest snapshot plus recent `history` (prior
+    snapshots, oldest-excluded-current) for decay/growth comparison.
+
+    Only works for reels on the Instagram account this server is configured to
+    manage — there are no insights for arbitrary public reels. This is separate
+    from `index_video_from_url`; no content hash is involved.
+    """
+    _ensure_db()
+    try:
+        snapshot = get_reel_insights_impl(url, _config, _insights_store, _meta_creds)
+    except (ReelNotOwned, InsightsError) as e:
+        raise ValueError(str(e))
+    result = _format_snapshot(snapshot)
+    result["history"] = [
+        {"fetched_at": _iso(h.get("fetched_at")), "metrics": h.get("metrics") or {}}
+        for h in _insights_store.list(snapshot["media_id"])
+        if h.get("fetched_at") != snapshot.get("fetched_at")
+    ][:_HISTORY_LIMIT]
+    return result
 
 
 API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()

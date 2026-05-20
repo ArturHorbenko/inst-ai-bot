@@ -15,9 +15,18 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from video_processor.config import get_config, validate_video_format
-from video_processor.store import DatabaseConnection, ArtifactStore, RunsStore, UrlCacheStore
+from video_processor.store import (
+    DatabaseConnection,
+    ArtifactStore,
+    RunsStore,
+    UrlCacheStore,
+    InsightsStore,
+    MetaCredentialsStore,
+)
 from video_processor.indexer import index_video
 from video_processor.runner import run_prompt, ArtifactNotFound
+from video_processor.insights import get_reel_insights, InsightsError, ReelNotOwned
+from video_processor.downloader import extract_shortcode
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -90,16 +99,20 @@ db_connection = DatabaseConnection(config)
 artifact_store: ArtifactStore = None
 runs_store: RunsStore = None
 url_cache: UrlCacheStore = None
+insights_store: InsightsStore = None
+meta_creds: MetaCredentialsStore = None
 
 
 @app.on_event("startup")
 async def startup():
-    global artifact_store, runs_store, url_cache
+    global artifact_store, runs_store, url_cache, insights_store, meta_creds
     if not db_connection.connect():
         raise RuntimeError("MongoDB connection required")
     artifact_store = ArtifactStore(db_connection.db)
     runs_store = RunsStore(db_connection.db)
     url_cache = UrlCacheStore(db_connection.db)
+    insights_store = InsightsStore(db_connection.db)
+    meta_creds = MetaCredentialsStore(db_connection.db)
     logger.info("Server ready")
 
 
@@ -198,6 +211,39 @@ def get_run(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+# ── Insights ──────────────────────────────────────────────────────────────────
+
+class InsightsRequest(BaseModel):
+    reel: str
+
+
+@app.post("/insights", dependencies=[Depends(require_api_key)])
+def create_insights_snapshot(request: InsightsRequest):
+    """Fetch fresh Instagram performance metrics for one of your own reels and
+    store an append-only snapshot."""
+    try:
+        return get_reel_insights(request.reel, config, insights_store, meta_creds)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ReelNotOwned as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InsightsError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.get("/insights", dependencies=[Depends(require_api_key)])
+def list_insights(reel: Optional[str] = None):
+    """List stored insights snapshots, newest first. Optionally filter by reel URL."""
+    if not reel:
+        return insights_store.list()
+    try:
+        shortcode = extract_shortcode(reel)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    media_id = insights_store.find_media_id(shortcode)
+    return insights_store.list(media_id) if media_id else []
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
