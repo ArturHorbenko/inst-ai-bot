@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_HOSTS = {"instagram.com", "www.instagram.com"}
 _HASHTAG_RE = re.compile(r"#([\w_]+)", re.UNICODE)
+_SHORTCODE_RE = re.compile(r"/(?:reel|reels|p)/([A-Za-z0-9_-]+)", re.IGNORECASE)
 _COMMENT_LIMIT = 10
 
 
@@ -25,6 +26,23 @@ def _is_instagram_reel_url(url: str) -> bool:
         return False
     path = parsed.path.lower()
     return "/reel/" in path or "/reels/" in path or "/p/" in path
+
+
+def extract_shortcode(url: str) -> str:
+    """Extract the Instagram shortcode from a reel/post URL.
+
+    Handles /reel/<code>/, /reels/<code>/ and /p/<code>/ forms. Raises
+    ValueError if the URL is not a recognisable Instagram post URL.
+    """
+    if not _is_instagram_reel_url(url):
+        raise ValueError(
+            f"Not an Instagram reel URL: {url!r}. "
+            "Expected https://www.instagram.com/reel/<code>/ or /p/<code>/"
+        )
+    match = _SHORTCODE_RE.search(urlparse(url).path)
+    if not match:
+        raise ValueError(f"Could not extract shortcode from {url!r}")
+    return match.group(1)
 
 
 def _extract_hashtags(text: str) -> List[str]:

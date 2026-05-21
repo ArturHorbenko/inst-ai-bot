@@ -120,3 +120,58 @@ class UrlCacheStore:
             {"$set": {"url": url, "content_hash": content_hash, "cached_at": datetime.now(timezone.utc)}},
             upsert=True,
         )
+
+
+class InsightsStore:
+    """Append-only time-series snapshots of reel performance. Unlike artifacts,
+    snapshots are mutable, account-scoped data — see docs/adr/0004."""
+
+    def __init__(self, db):
+        self._col = db["insights"]
+        self._col.create_index([("media_id", 1), ("fetched_at", DESCENDING)])
+
+    def insert(self, snapshot: dict) -> dict:
+        self._col.insert_one({**snapshot})
+        return _clean(snapshot)
+
+    def list(self, media_id: Optional[str] = None) -> list[dict]:
+        query = {"media_id": media_id} if media_id else {}
+        docs = self._col.find(query).sort("fetched_at", DESCENDING)
+        return [_clean(d) for d in docs]
+
+    def latest(self, media_id: str) -> Optional[dict]:
+        doc = self._col.find({"media_id": media_id}).sort("fetched_at", DESCENDING).limit(1)
+        docs = list(doc)
+        return _clean(docs[0]) if docs else None
+
+    def find_media_id(self, shortcode: str) -> Optional[str]:
+        """Resolve shortcode -> media_id from any prior snapshot. This is the
+        resolution cache: only the first fetch per reel pages the media list."""
+        doc = self._col.find_one({"shortcode": shortcode})
+        return doc["media_id"] if doc else None
+
+
+class MetaCredentialsStore:
+    """Single-document store for the live Instagram Graph API token. The server
+    refreshes the token in place here so .env never has to be rewritten."""
+
+    _DOC_ID = "graph_token"
+
+    def __init__(self, db):
+        self._col = db["meta_credentials"]
+
+    def get(self) -> Optional[dict]:
+        doc = self._col.find_one({"_id": self._DOC_ID})
+        return _clean(doc) if doc else None
+
+    def put(self, access_token: str, expires_at: datetime, bootstrap_fingerprint: str):
+        self._col.update_one(
+            {"_id": self._DOC_ID},
+            {"$set": {
+                "access_token": access_token,
+                "expires_at": expires_at,
+                "bootstrap_fingerprint": bootstrap_fingerprint,
+                "refreshed_at": datetime.now(timezone.utc),
+            }},
+            upsert=True,
+        )

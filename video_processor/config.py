@@ -23,6 +23,12 @@ class Config:
     INDEXING_TIMEOUT: int = 1800
     INDEXING_POLL_INTERVAL: int = 10
     SUPPORTED_VIDEO_FORMATS: str = "mp4,mov,avi,mkv,webm,m4v"
+    # Instagram Graph API (reel insights) — see docs/adr/0004
+    META_APP_ID: str = None
+    META_APP_SECRET: str = None
+    META_GRAPH_TOKEN: str = None
+    INSTAGRAM_USER_ID: str = None
+    META_GRAPH_VERSION: str = "v21.0"
 
 
 def get_config():
@@ -41,6 +47,12 @@ def get_config():
         INDEXING_TIMEOUT=int(os.environ.get("INDEXING_TIMEOUT", "1800")),
         INDEXING_POLL_INTERVAL=int(os.environ.get("INDEXING_POLL_INTERVAL", "10")),
         SUPPORTED_VIDEO_FORMATS=os.environ.get("SUPPORTED_VIDEO_FORMATS", "mp4,mov,avi,mkv,webm,m4v"),
+        META_APP_ID=os.environ.get("META_APP_ID"),
+        META_APP_SECRET=os.environ.get("META_APP_SECRET"),
+        # FB_TOKEN kept as a fallback so an existing .env keeps working pre-rename.
+        META_GRAPH_TOKEN=os.environ.get("META_GRAPH_TOKEN") or os.environ.get("FB_TOKEN"),
+        INSTAGRAM_USER_ID=os.environ.get("INSTAGRAM_USER_ID"),
+        META_GRAPH_VERSION=os.environ.get("META_GRAPH_VERSION", "v21.0"),
     )
 
 

@@ -4,23 +4,19 @@ How the server actually runs on the host machine right now. Read this before ass
 
 ## Topology
 
+Current active path is MCP-only over the private tailnet (see below). The old public FastAPI path on `:8001` is intentionally down for now:
+
 ```
 public internet
        │
        ▼
 Tailscale Funnel edge  (https://pop-os.tailafd09f.ts.net)
-       │  HTTPS, TLS terminated by Tailscale, forwards X-Forwarded-For
+       │  config may still exist, but upstream is intentionally stopped
        ▼
-127.0.0.1:8001   (this host, behind no extra proxy)
+127.0.0.1:8001   (no listener while inst-ai-bot.service is stopped/disabled)
        │
-       ▼
-inst-ai-bot.service  (systemd user unit)
-       │
-       ▼
-uvicorn server:app --workers 2  → FastAPI app (server.py)
-       │
-       ▼
-MongoDB Atlas (creds in .env)
+       ✕
+inst-ai-bot.service  (FastAPI HTTP API; currently stopped + disabled)
 ```
 
 Alongside the FastAPI HTTP server, an MCP server runs on the same host. Two reachable URLs:
@@ -43,7 +39,7 @@ uvicorn (scripts/run_mcp.py → video_processor/mcp_server.py)
 MongoDB Atlas
 ```
 
-The MCP server is the auth surface that skills call (Streamable HTTP, `Authorization: Bearer <INST_AI_BOT_API_KEY>`). The FastAPI HTTP API stays in place for the Next.js log viewer and any external callers using `X-API-Key`.
+The MCP server is the active auth surface that skills/desktop apps call (Streamable HTTP, `Authorization: Bearer <INST_...>`). The old FastAPI HTTP API on `:8001` is not needed for the current MCP workflow and should remain stopped unless intentionally re-enabled.
 
 **Two-port reachability** (intentional split):
 
@@ -55,19 +51,20 @@ The Next.js frontend is not part of the active runtime right now and should not 
 
 ## Server lifecycle
 
-The FastAPI server runs as the user-scope systemd unit `inst-ai-bot.service`:
+The FastAPI server is defined as the user-scope systemd unit `inst-ai-bot.service`, but it is intentionally **stopped and disabled** right now because public Funnel access is not needed:
 
 - Unit file: `~/.config/systemd/user/inst-ai-bot.service`
 - Working dir: `/home/artur/projects/inst-ai-bot`
 - ExecStart: `venv/bin/uvicorn server:app --host 0.0.0.0 --port 8001 --workers 2`
 - EnvironmentFile: `/home/artur/projects/inst-ai-bot/.env` (loaded fresh on start)
 - `Restart=on-failure` with 5s backoff
-- `WantedBy=default.target`, with `loginctl Linger=yes` → starts on boot without login
+- Current status: stopped + disabled (`systemctl --user disable --now inst-ai-bot`)
 
 Operating it:
 
 ```bash
 systemctl --user status inst-ai-bot         # current state
+systemctl --user enable --now inst-ai-bot   # only if intentionally re-enabling the old HTTP API
 systemctl --user restart inst-ai-bot        # after code change OR .env edit
 systemctl --user stop inst-ai-bot           # while debugging by hand
 systemctl --user start inst-ai-bot
@@ -124,10 +121,10 @@ The host runs two parallel mappings under the same `*.ts.net` hostname, both bac
 
 | Mapping | Scope | Listen | Proxies to | How it was enabled |
 |---|---|---|---|---|
-| Funnel | Public internet | `:443` | `127.0.0.1:8001` (FastAPI) | `sudo tailscale funnel --bg 8001` |
+| Funnel | Public internet | `:443` | `127.0.0.1:8001` (FastAPI) | Config still present, but upstream `inst-ai-bot.service` is stopped/disabled; fully remove with `sudo tailscale funnel --https=443 off` |
 | Serve | Tailnet only | `:8443` | `127.0.0.1:8002` (MCP) | `sudo tailscale serve --bg --https=8443 http://127.0.0.1:8002` |
 
-Both persist across reboots (the `--bg` flag stores the config). Inspect with `tailscale funnel status` (shows both, since Serve is the underlying mechanism) or `tailscale serve status`.
+Both mappings persist across reboots (the `--bg` flag stores the config). The public Funnel config still persists until a sudo-capable shell runs the disable command, but it currently has no live backend because `inst-ai-bot.service` is disabled. Inspect with `tailscale funnel status` (shows both, since Serve is the underlying mechanism) or `tailscale serve status`.
 
 Disable individually:
 - `sudo tailscale funnel --https=443 off` — turns off public access to FastAPI.
@@ -164,6 +161,7 @@ Server reads from `/home/artur/projects/inst-ai-bot/.env`. The full set of recog
 
 - `INST_AI_BOT_API_KEY` — shared secret for `X-API-Key` (see above).
 - `INST_AI_BOT_RATE_LIMIT_PER_MIN` — rate-limit ceiling per worker.
+- `META_APP_ID`, `META_APP_SECRET`, `META_GRAPH_TOKEN`, `INSTAGRAM_USER_ID` — Instagram Graph API credentials for `get_reel_insights` (reel analytics). `META_GRAPH_TOKEN` falls back to the legacy `FB_TOKEN` name. Mint a fresh token by opening `auth/index.html` in a browser (Facebook Login → copy the access token); the server then refreshes it automatically and persists the live token in MongoDB (`meta_credentials` collection), so a near-expiry token does not need manual rotation.
 
 Secrets are not committed; `.env` is gitignored. Skills no longer carry their own `.env` — auth lives in the per-host MCP connector config.
 
@@ -183,7 +181,7 @@ See `skills/README.md` for the per-host MCP connector setup (Claude Code / Deskt
 
 ## Public-traffic monitoring / emergency containment
 
-Hermes cron job `inst-ai-bot Funnel traffic watchdog` (`a275216c92dc`) runs every minute via script `~/.hermes/profiles/artur/scripts/inst_ai_funnel_traffic_watchdog.py`.
+Hermes cron job `inst-ai-bot Funnel traffic watchdog` (`a275216c92dc`) exists but is currently paused because the public FastAPI backend is stopped/disabled. Resume it only if re-enabling the public `:8001` surface. Script: `~/.hermes/profiles/artur/scripts/inst_ai_funnel_traffic_watchdog.py`.
 
 Behavior:
 
@@ -223,4 +221,5 @@ tailscale funnel status
 | Watchdog stopped the backend | Inspect `journalctl --user -u inst-ai-bot --since "30 min ago"`, then either keep it down or restart with `systemctl --user start inst-ai-bot` |
 | Want to test a change without affecting prod | Stop the unit (`systemctl --user stop inst-ai-bot`), run uvicorn manually on a different port, then start the unit again when done |
 | Rotated the API key | Update `.env` (server only), restart both units (`systemctl --user restart inst-ai-bot inst-ai-bot-mcp`), update the bearer in each Claude host's MCP connector config |
-| Rebooted the host | Server auto-starts; Funnel reattaches automatically; no action needed |
+| Rebooted the host | MCP server auto-starts and tailnet Serve reattaches. FastAPI `inst-ai-bot.service` remains disabled; public Funnel config may still show, but has no live `:8001` backend. |
+| `get_reel_insights` fails with a token error | The Instagram Graph token expired or was revoked. Open `auth/index.html` in a browser, log in via Facebook, copy the fresh access token into `META_GRAPH_TOKEN` in `.env`, then `systemctl --user restart inst-ai-bot-mcp`. The server detects the changed token, re-seeds, and refreshes from there. |

@@ -29,16 +29,17 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 ├── web/                      # Next.js frontend (read-only log view)
 ├── video_processor/
 │   ├── config.py             # Config dataclass + env loading
-│   ├── store.py              # MongoDB: ArtifactStore, RunsStore, UrlCacheStore
+│   ├── store.py              # MongoDB: ArtifactStore, RunsStore, UrlCacheStore, InsightsStore, MetaCredentialsStore
 │   ├── indexer.py            # index_video() — download + hash + transcribe
 │   ├── runner.py             # run_prompt() — route prompt to model provider
 │   ├── gemini.py             # Gemini Files API caller (upload + reuse cached ref)
 │   ├── transcription.py      # Groq Whisper wrapper
 │   ├── downloader.py         # yt-dlp Instagram reel downloader
+│   ├── insights.py           # Instagram Graph API — reel performance snapshots
 │   └── mcp_server.py         # FastMCP server exposing primitives to Claude hosts
 ├── scripts/
 │   └── run_mcp.py            # MCP entrypoint (uvicorn on :8002, path /mcp)
-├── server.py                 # FastAPI server — 7 endpoints
+├── server.py                 # FastAPI server — 9 endpoints
 ├── CONTEXT.md                # Domain glossary
 └── docs/adr/                 # Architecture decision records
 ```
@@ -47,8 +48,8 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 
 Two parallel surfaces over the same MongoDB-backed core:
 
-- **FastAPI HTTP** (`server.py`, port 8001) — the 7 endpoints below; gated by `X-API-Key`. Used by the Next.js log viewer and any direct callers.
-- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — three tools: `index_video_from_url`, `run_prompt`, `get_artifact`. Streamable HTTP transport, gated by `Authorization: Bearer <key>` (same `INST_AI_BOT_API_KEY`). This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
+- **FastAPI HTTP** (`server.py`, port 8001) — the 9 endpoints below; gated by `X-API-Key`. Used by the Next.js log viewer and any direct callers.
+- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — four tools: `index_video_from_url`, `run_prompt`, `get_artifact`, `get_reel_insights`. Streamable HTTP transport, gated by `Authorization: Bearer <key>` (same `INST_AI_BOT_API_KEY`). This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
 
 Both wrap the same `index_video` / `run_prompt` functions and write to the same `artifacts` and `runs` collections — runs created via MCP show up in `GET /runs`.
 
@@ -120,6 +121,35 @@ All endpoints are synchronous. FastAPI runs sync handlers in a thread pool autom
 
 **`GET /runs/{run_id}`** — Get a single run by ID.
 
+### Insights
+
+Instagram reel performance — mutable, account-scoped, append-only snapshots. Separate from artifacts and not content-addressed (see `docs/adr/0004`). Only works for reels on the operator's own Professional account.
+
+**`POST /insights`** — Fetch fresh Instagram metrics for one of your own reels and store a snapshot.
+```json
+// Request
+{ "reel": "https://www.instagram.com/reel/..." }
+
+// Response — Insights snapshot
+{
+  "media_id": "17991198722554695",
+  "shortcode": "Cxyz123",
+  "permalink": "https://www.instagram.com/reel/Cxyz123/",
+  "media_product_type": "REELS",
+  "caption": "...",
+  "posted_at": "2026-05-01T12:00:00+0000",
+  "metrics": {
+    "views": 12345, "reach": 9000, "likes": 300, "comments": 12,
+    "saved": 40, "shares": 8, "total_interactions": 360,
+    "ig_reels_avg_watch_time": 4200, "ig_reels_video_view_total_time": 51840000
+  },
+  "fetched_at": "...",
+  "schema_version": 1
+}
+```
+
+**`GET /insights?reel={url}`** — List stored snapshots (newest first), optionally filtered by reel URL.
+
 ### Health
 
 **`GET /health`** — `{"status": "healthy", "version": "2.0.0"}`
@@ -140,6 +170,11 @@ Environment variables via `.env`:
 | `SUPPORTED_VIDEO_FORMATS` | `mp4,mov,avi,mkv,webm,m4v` | Accepted upload formats |
 | `INST_AI_BOT_API_KEY` | — | If set, every endpoint except `/health` requires header `X-API-Key: <value>` (401 otherwise). Unset = auth disabled. |
 | `INST_AI_BOT_RATE_LIMIT_PER_MIN` | `120` | Per-IP sliding-window rate limit (in-memory, per worker). Behind a proxy uses `X-Forwarded-For` for the real IP. Set to `0` to disable. |
+| `META_APP_ID` | — | Meta app ID. Required by `get_reel_insights` to refresh the Graph token. |
+| `META_APP_SECRET` | — | Meta app secret. Required by `get_reel_insights` to refresh the Graph token. |
+| `META_GRAPH_TOKEN` | — | Long-lived Instagram Graph API token (bootstrap value). Falls back to `FB_TOKEN` if unset. The server refreshes the live token in place in MongoDB. |
+| `INSTAGRAM_USER_ID` | — | Instagram Professional account ID. Required by `get_reel_insights` to resolve a reel URL via the account's media list. |
+| `META_GRAPH_VERSION` | `v21.0` | Graph API version path segment. |
 
 ## Architecture Notes
 
@@ -147,7 +182,8 @@ Environment variables via `.env`:
 - **Gemini file caching**: `gemini_file_ref` stored on artifact; reused across runs if still ACTIVE (avoids re-upload on every prompt iteration).
 - **Model routing**: `model` field uses `provider/model-id` format (`google/gemini-2.5-pro`). Runner splits on `/` to dispatch to the right SDK. Currently only `google` is implemented.
 - **Idempotent indexing**: content-addressed by SHA-256. Re-indexing the same URL or file returns the existing artifact. New source URLs are appended to `sources[]`.
-- **MongoDB collections**: `artifacts`, `runs`, `url_cache`. `url_cache` maps URL → content_hash to skip re-downloads.
+- **Insights are not content-addressed**: reel performance snapshots live in a separate `insights` collection, keyed by Instagram `media_id` + `fetched_at`, append-only. See `docs/adr/0004`.
+- **MongoDB collections**: `artifacts`, `runs`, `url_cache`, `insights`, `meta_credentials`. `url_cache` maps URL → content_hash to skip re-downloads; `insights` holds reel performance snapshots; `meta_credentials` holds the refreshable Instagram Graph token.
 
 ## Code Style Guidelines
 

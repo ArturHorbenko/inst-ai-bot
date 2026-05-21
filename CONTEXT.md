@@ -27,6 +27,10 @@ The act of turning a video input into an Artifact: download (if URL) → content
 Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp)`. Runs are the unit the web UI displays.
 _Avoid_: Analysis, query, request
 
+**Insights snapshot**:
+A point-in-time capture of one reel's Instagram performance — views, reach, likes, comments, saved, shares, total interactions, watch time — pulled from the Instagram Graph API. Keyed by Instagram `media_id` + `fetched_at`; append-only, never overwritten. Mutable and account-scoped — the deliberate counterpoint to the immutable, content-addressed Artifact (see `docs/adr/0004`). Only available for reels on the operator's own Professional account.
+_Avoid_: Analytics, Stats. (Use "metrics" only for the numbers inside a snapshot.)
+
 ## Relationships
 
 - An **Artifact** has exactly one **Content hash** (its identity)
@@ -34,6 +38,7 @@ _Avoid_: Analysis, query, request
 - A **Source** has one **Metadata** blob (possibly empty)
 - A **Run** targets exactly one **Artifact** with exactly one prompt + model
 - Pasting the same URL twice resolves to the same **Artifact**; a fresh **Source** entry may be appended if content (caption/comments) has changed
+- An **Insights snapshot** belongs to an Instagram `media_id`, not to an **Artifact** — the two are correlated by reel URL, never linked by a stored reference
 
 ## Flagged ambiguities
 
