@@ -12,7 +12,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
-from .downloader import _extract_hashtags, _is_instagram_reel_url
+from .downloader import (
+    _extract_hashtags,
+    _is_instagram_reel_url,
+    _resolve_cookie_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +39,6 @@ _USER_AGENT = (
 _SHORTCODE_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
-
-
-def _resolve_cookie_path() -> Optional[Path]:
-    """Return the configured Instagram cookie file, validating it exists."""
-    cookies_file = os.environ.get("INSTAGRAM_COOKIES_FILE", "").strip()
-    if not cookies_file:
-        return None
-    cookie_path = Path(cookies_file).expanduser()
-    if not cookie_path.exists():
-        raise ValueError(f"INSTAGRAM_COOKIES_FILE does not exist: {cookie_path}")
-    return cookie_path
 
 
 def _shortcode_from_url(url: str) -> Optional[str]:

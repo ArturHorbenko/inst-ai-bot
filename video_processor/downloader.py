@@ -1,7 +1,8 @@
 import logging
+import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from yt_dlp import YoutubeDL
@@ -12,6 +13,21 @@ logger = logging.getLogger(__name__)
 _ALLOWED_HOSTS = {"instagram.com", "www.instagram.com"}
 _HASHTAG_RE = re.compile(r"#([\w_]+)", re.UNICODE)
 _COMMENT_LIMIT = 10
+
+
+def _resolve_cookie_path() -> Optional[Path]:
+    """Return the configured Instagram cookie file, validating it exists.
+
+    Instagram serves logged-out clients an empty media response, so both the
+    download path and the post-status path need a logged-in session cookie.
+    """
+    cookies_file = os.environ.get("INSTAGRAM_COOKIES_FILE", "").strip()
+    if not cookies_file:
+        return None
+    cookie_path = Path(cookies_file).expanduser()
+    if not cookie_path.exists():
+        raise ValueError(f"INSTAGRAM_COOKIES_FILE does not exist: {cookie_path}")
+    return cookie_path
 
 
 def _is_instagram_reel_url(url: str) -> bool:
@@ -95,6 +111,9 @@ def download_instagram_reel(url: str, dest_dir: Path) -> Tuple[Path, Dict[str, A
         "no_warnings": True,
         "getcomments": True,
     }
+    cookie_path = _resolve_cookie_path()
+    if cookie_path:
+        ydl_opts["cookiefile"] = str(cookie_path)
 
     logger.info(f"Downloading Instagram reel: {url}")
     try:
