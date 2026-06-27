@@ -1,9 +1,10 @@
 """MCP server fronting the inst-ai-bot artifact/run primitives.
 
-Exposes three tools over Streamable HTTP:
+Exposes tools over Streamable HTTP:
   - index_video_from_url(url)
   - run_prompt(artifact_hash, prompt, model?, label?)
   - get_artifact(content_hash)
+  - get_instagram_post_status(url, max_comments?, include_comments?)
 
 Auth: Bearer token in `Authorization: Bearer <key>`; must match
 `INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
@@ -22,10 +23,19 @@ from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from datetime import datetime, timezone
+
 from .config import get_config
 from .indexer import index_video
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
-from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
+from .social_status import fetch_instagram_post_status, to_status_snapshot
+from .store import (
+    ArtifactStore,
+    DatabaseConnection,
+    PostStatusStore,
+    RunsStore,
+    UrlCacheStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +61,11 @@ _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
 _url_cache: Optional[UrlCacheStore] = None
+_post_status_store: Optional[PostStatusStore] = None
 
 
 def _ensure_db() -> None:
-    global _artifact_store, _runs_store, _url_cache
+    global _artifact_store, _runs_store, _url_cache, _post_status_store
     if _artifact_store is not None:
         return
     if not _db.connect():
@@ -62,6 +73,7 @@ def _ensure_db() -> None:
     _artifact_store = ArtifactStore(_db.db)
     _runs_store = RunsStore(_db.db)
     _url_cache = UrlCacheStore(_db.db)
+    _post_status_store = PostStatusStore(_db.db)
 
 
 def _trim_artifact(artifact: dict) -> dict:
@@ -142,6 +154,36 @@ def get_artifact(content_hash: str) -> dict:
     if not artifact:
         raise ValueError(f"Artifact not found: {content_hash}")
     return _trim_artifact(artifact)
+
+
+@mcp.tool()
+def get_instagram_post_status(
+    url: str,
+    max_comments: int = 50,
+    include_comments: bool = True,
+) -> dict:
+    """Fetch current public Instagram reel/post status and persist a snapshot.
+
+    Use for posted `/reel/...` or `/p/...` URLs when you need fresh engagement
+    numbers and a bounded sample of comments. Returns caption, hashtags, uploader,
+    `like_count`, `view_count`, `comment_count`, and up to `max_comments` ranked
+    ("Top") comments (each with a preview of its reply thread). Metadata comes from
+    yt-dlp; comments come from Instagram's web API and require a logged-in session
+    (`INSTAGRAM_COOKIES_FILE`). Each call is stored as a timestamped snapshot in the
+    `post_status` collection, so repeated calls build an engagement history.
+    """
+    _ensure_db()
+    status = fetch_instagram_post_status(
+        url=url,
+        max_comments=max_comments,
+        include_comments=include_comments,
+    )
+    fetched_at = datetime.now(timezone.utc)
+    snapshot = to_status_snapshot(status, fetched_at)
+    _post_status_store.insert(snapshot)
+    status["shortcode"] = snapshot["shortcode"]
+    status["fetched_at"] = fetched_at.isoformat()
+    return status
 
 
 API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()

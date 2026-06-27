@@ -111,6 +111,34 @@ class RunsStore:
         return [_clean(d) for d in docs]
 
 
+class PostStatusStore:
+    """Snapshots of Instagram post status (engagement + comments) over time.
+
+    One document per fetch, keyed by `shortcode` + `fetched_at`, so repeated
+    fetches of the same post build a history you can diff later.
+    """
+
+    def __init__(self, db):
+        self._col = db["post_status"]
+        self._col.create_index([("shortcode", 1), ("fetched_at", DESCENDING)])
+
+    def insert(self, snapshot: dict) -> dict:
+        doc = {**snapshot}
+        doc.setdefault("fetched_at", datetime.now(timezone.utc))
+        self._col.insert_one(doc)
+        return _clean(doc)
+
+    def latest(self, shortcode: str) -> Optional[dict]:
+        doc = self._col.find_one(
+            {"shortcode": shortcode}, sort=[("fetched_at", DESCENDING)]
+        )
+        return _clean(doc) if doc else None
+
+    def history(self, shortcode: str) -> list[dict]:
+        docs = self._col.find({"shortcode": shortcode}).sort("fetched_at", DESCENDING)
+        return [_clean(d) for d in docs]
+
+
 class UrlCacheStore:
     def __init__(self, db):
         self._col = db["url_cache"]

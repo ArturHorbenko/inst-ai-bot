@@ -36,6 +36,7 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 │   ├── twelvelabs.py         # TwelveLabs Pegasus caller (index video once + reuse video_id)
 │   ├── transcription.py      # Groq Whisper wrapper
 │   ├── downloader.py         # yt-dlp Instagram reel downloader
+│   ├── social_status.py      # live post status + ranked comments (yt-dlp + IG web API)
 │   └── mcp_server.py         # FastMCP server exposing primitives to Claude hosts
 ├── scripts/
 │   └── run_mcp.py            # MCP entrypoint (uvicorn on :8002, path /mcp)
@@ -49,7 +50,9 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 Two parallel surfaces over the same MongoDB-backed core:
 
 - **FastAPI HTTP** (`server.py`, port 8001) — the 7 endpoints below; gated by `X-API-Key`. Used by the Next.js log viewer and any direct callers.
-- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — three tools: `index_video_from_url`, `run_prompt`, `get_artifact`. Streamable HTTP transport, gated by `Authorization: Bearer <INST_AI_BOT_API_KEY>`. This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
+- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — four tools: `index_video_from_url`, `run_prompt`, `get_artifact`, `get_instagram_post_status`. Streamable HTTP transport, gated by `Authorization: Bearer <INST_AI_BOT_API_KEY>`. This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
+
+`get_instagram_post_status(url, max_comments?, include_comments?)` fetches *live* engagement + ranked ("Top") comments for an already-posted reel/post without indexing it. Metadata comes from yt-dlp; comments come from Instagram's web comments API (top-level, each with a reply-thread preview) and require a logged-in session via `INSTAGRAM_COOKIES_FILE`. Every call writes a timestamped snapshot to the `post_status` collection, so repeated calls build an engagement history. See `video_processor/social_status.py`.
 
 Both wrap the same `index_video` / `run_prompt` functions and write to the same `artifacts` and `runs` collections — runs created via MCP show up in `GET /runs`.
 
@@ -146,6 +149,8 @@ Environment variables via `.env`:
 | `SUPPORTED_VIDEO_FORMATS` | `mp4,mov,avi,mkv,webm,m4v` | Accepted upload formats |
 | `INST_AI_BOT_API_KEY` | — | If set, every endpoint except `/health` requires header `X-API-Key: <value>` (401 otherwise). Unset = auth disabled. |
 | `INST_AI_BOT_RATE_LIMIT_PER_MIN` | `120` | Per-IP sliding-window rate limit (in-memory, per worker). Behind a proxy uses `X-Forwarded-For` for the real IP. Set to `0` to disable. |
+| `INSTAGRAM_COOKIES_FILE` | — | Path to a Netscape-format cookie file with a logged-in Instagram session. Required for `get_instagram_post_status` to fetch comments (Instagram blocks logged-out comment reads). Without it, metadata still returns and `comments_error` explains the gap. |
+| `INSTAGRAM_COMMENT_PAGE_DELAY` | `2` | Seconds to wait between successive comment-page requests in `get_instagram_post_status`, to stay under Instagram's burst rate limit (HTTP 429). |
 
 ## Architecture Notes
 
@@ -154,7 +159,7 @@ Environment variables via `.env`:
 - **TwelveLabs video caching**: TwelveLabs requires a video to be indexed before it can be prompted. The first `twelvelabs/*` run uploads the video into a TwelveLabs index and stores the resulting `twelvelabs_video_id` on the artifact; later runs reuse it and skip straight to analyze. This lives inside the run path — Artifact indexing (Whisper transcription) is unchanged and provider-agnostic.
 - **Model routing**: `model` field uses `provider/model-id` format (`google/gemini-2.5-pro`, `twelvelabs/pegasus1.5`). Runner splits on `/` to dispatch to the right SDK. Implemented: `google` and `twelvelabs`. Comparing providers is two Runs on the same artifact with different `model` values — no dedicated compare endpoint.
 - **Idempotent indexing**: content-addressed by SHA-256. Re-indexing the same URL or file returns the existing artifact. New source URLs are appended to `sources[]`.
-- **MongoDB collections**: `artifacts`, `runs`, `url_cache`. `url_cache` maps URL → content_hash to skip re-downloads.
+- **MongoDB collections**: `artifacts`, `runs`, `url_cache`, `post_status`. `url_cache` maps URL → content_hash to skip re-downloads. `post_status` holds timestamped snapshots from `get_instagram_post_status` (keyed by `shortcode` + `fetched_at`) for engagement history.
 
 ## Code Style Guidelines
 
