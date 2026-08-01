@@ -5,7 +5,7 @@ import tempfile
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Union
+from typing import Any, Optional, Union
 
 from .downloader import download_instagram_reel
 from .transcription import extract_transcription
@@ -21,6 +21,10 @@ def index_video(
     config,
     artifact_store: ArtifactStore,
     url_cache: UrlCacheStore,
+    source_url: Optional[str] = None,
+    source_type: Optional[str] = None,
+    source_metadata: Optional[dict[str, Any]] = None,
+    source_fetcher: Optional[str] = None,
 ) -> dict:
     """
     Index a video from a URL or local file path. Idempotent — same content returns existing artifact.
@@ -41,18 +45,23 @@ def index_video(
         if is_url:
             video_path, source_metadata = download_instagram_reel(source, temp_dir)
             platform = _detect_platform(source)
+            provenance_url = source
+            fetcher = "yt-dlp"
         else:
             video_path = Path(source)
-            source_metadata = {}
-            platform = "upload"
+            source_metadata = source_metadata or {}
+            platform = source_type or "upload"
+            provenance_url = source_url
+            fetcher = source_fetcher or ("provided_upload" if source_url else None)
 
         content_hash = _hash_file(video_path)
 
         existing = artifact_store.get_by_hash(content_hash)
         if existing:
             logger.info(f"Artifact already exists for hash {content_hash}")
+            if provenance_url:
+                _append_source_if_new(artifact_store, existing, provenance_url, platform, source_metadata, fetcher)
             if is_url:
-                _append_source_if_new(artifact_store, existing, source, platform, source_metadata)
                 url_cache.put(source, content_hash)
             return artifact_store.get_by_hash(content_hash)
 
@@ -77,8 +86,9 @@ def index_video(
                 "segments": segments,
                 "model": "whisper-large-v3-groq",
             },
-            "sources": [_build_source(source if is_url else None, platform, source_metadata)],
+            "sources": [_build_source(provenance_url, platform, source_metadata, fetcher)],
             "gemini_file_ref": None,
+            "twelvelabs_video_id": None,
             "indexed_at": datetime.now(timezone.utc),
             "schema_version": 1,
         }
@@ -126,17 +136,24 @@ def _detect_platform(url: str) -> str:
     return "url"
 
 
-def _build_source(url, platform: str, metadata: dict) -> dict:
+def _build_source(url, platform: str, metadata: dict, fetcher: Optional[str] = None) -> dict:
     return {
         "type": platform,
         "url": url,
         "fetched_at": datetime.now(timezone.utc),
-        "fetcher": "yt-dlp" if url else None,
+        "fetcher": fetcher or ("yt-dlp" if url else None),
         "metadata": metadata or {},
     }
 
 
-def _append_source_if_new(artifact_store: ArtifactStore, artifact: dict, url: str, platform: str, metadata: dict):
+def _append_source_if_new(
+    artifact_store: ArtifactStore,
+    artifact: dict,
+    url: str,
+    platform: str,
+    metadata: dict,
+    fetcher: Optional[str] = None,
+):
     existing_urls = {s.get("url") for s in artifact.get("sources", [])}
     if url not in existing_urls:
-        artifact_store.append_source(artifact["content_hash"], _build_source(url, platform, metadata))
+        artifact_store.append_source(content_hash=artifact["content_hash"], source=_build_source(url, platform, metadata, fetcher))

@@ -140,7 +140,7 @@ DNS: the hostname resolves publicly via Tailscale's `*.ts.net` zone (`209.177.14
 Two surfaces, same shared secret (`INST_AI_BOT_API_KEY` in `.env`):
 
 - **FastAPI HTTP** (port 8001): every endpoint except `/health` requires header `X-API-Key: <secret>`. Constant-time compare in `require_api_key()` (`server.py`).
-- **MCP server** (port 8002): every request requires `Authorization: Bearer <secret>`. Constant-time compare in `BearerAuthMiddleware` (`video_processor/mcp_server.py`).
+- **MCP server** (port 8002): every request requires `Authorization: Bearer <INST_AI_BOT_API_KEY>`. Constant-time compare in `BearerAuthMiddleware` (`video_processor/mcp_server.py`).
 
 If `INST_AI_BOT_API_KEY` is unset, auth is disabled on both surfaces and a warning is logged at startup.
 
@@ -164,6 +164,7 @@ Server reads from `/home/artur/projects/inst-ai-bot/.env`. The full set of recog
 
 - `INST_AI_BOT_API_KEY` — shared secret for `X-API-Key` (see above).
 - `INST_AI_BOT_RATE_LIMIT_PER_MIN` — rate-limit ceiling per worker.
+- `TWELVE_LABS_API_KEY`, `TWELVE_LABS_INDEX_NAME`, `TWELVE_LABS_INDEX_ID` — TwelveLabs provider settings for `run_prompt(..., model="twelvelabs/pegasus1.5")`; first run indexes the artifact's video and caches `twelvelabs_video_id` on the artifact.
 
 Secrets are not committed; `.env` is gitignored. Skills no longer carry their own `.env` — auth lives in the per-host MCP connector config.
 

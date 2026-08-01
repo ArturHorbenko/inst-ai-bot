@@ -1,9 +1,10 @@
 """MCP server fronting the inst-ai-bot artifact/run primitives.
 
-Exposes three tools over Streamable HTTP:
+Exposes tools over Streamable HTTP:
   - index_video_from_url(url)
-  - run_prompt(artifact_hash, prompt, model?, label?)
+  - run_prompt(artifact_hash, prompt, model?, label?, metadata?)
   - get_artifact(content_hash)
+  - get_instagram_post_status(url, max_comments?, include_comments?)
 
 Auth: Bearer token in `Authorization: Bearer <key>`; must match
 `INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
@@ -22,10 +23,20 @@ from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
+from datetime import datetime, timezone
+
 from .config import get_config
+from .dashboard_analytics import DashboardAnalyticsClient
 from .indexer import index_video
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
-from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
+from .social_status import fetch_instagram_post_status, to_status_snapshot
+from .store import (
+    ArtifactStore,
+    DatabaseConnection,
+    PostStatusStore,
+    RunsStore,
+    UrlCacheStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +62,12 @@ _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
 _url_cache: Optional[UrlCacheStore] = None
+_post_status_store: Optional[PostStatusStore] = None
+_dashboard_analytics: Optional[DashboardAnalyticsClient] = None
 
 
 def _ensure_db() -> None:
-    global _artifact_store, _runs_store, _url_cache
+    global _artifact_store, _runs_store, _url_cache, _post_status_store
     if _artifact_store is not None:
         return
     if not _db.connect():
@@ -62,6 +75,17 @@ def _ensure_db() -> None:
     _artifact_store = ArtifactStore(_db.db)
     _runs_store = RunsStore(_db.db)
     _url_cache = UrlCacheStore(_db.db)
+    _post_status_store = PostStatusStore(_db.db)
+
+
+def _dashboard_client() -> DashboardAnalyticsClient:
+    global _dashboard_analytics
+    if _dashboard_analytics is None:
+        _dashboard_analytics = DashboardAnalyticsClient(
+            _config.ANALYTICS_DASHBOARD_URL,
+            _config.ANALYTICS_DASHBOARD_API_KEY,
+        )
+    return _dashboard_analytics
 
 
 def _trim_artifact(artifact: dict) -> dict:
@@ -106,13 +130,18 @@ def run_prompt(
     prompt: str,
     model: str = "google/gemini-2.5-pro",
     label: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> dict:
     """Run an opaque multimodal prompt against an indexed artifact.
 
     `artifact_hash` must be a `content_hash` returned by `index_video_from_url`.
-    `model` uses `provider/model-id` format (e.g. `google/gemini-2.5-pro`); only
-    the `google` provider is wired today. `label` is an optional tag for grouping
-    runs in the log view. Returns `{run_id, output}`.
+    `model` uses `provider/model-id` format. Two providers are wired:
+    `google/gemini-2.5-pro` (default) and `twelvelabs/pegasus1.5`. To compare
+    providers, run the same prompt twice with different `model` values and one
+    shared `label` — both runs show up side by side in the log view. `label` is
+    an optional tag for grouping runs. `metadata` optionally records a stable
+    caller namespace such as a trait schema and prompt version. Returns
+    `{run_id, output}`.
     """
     _ensure_db()
     try:
@@ -124,6 +153,7 @@ def run_prompt(
             config=_config,
             artifact_store=_artifact_store,
             runs_store=_runs_store,
+            metadata=metadata,
         )
     except ArtifactNotFound as e:
         raise ValueError(str(e))
@@ -140,6 +170,58 @@ def get_artifact(content_hash: str) -> dict:
     if not artifact:
         raise ValueError(f"Artifact not found: {content_hash}")
     return _trim_artifact(artifact)
+
+
+@mcp.tool()
+def list_recent_reels(limit: int = 10) -> list[dict]:
+    """Read up to 25 recent Reels from the dashboard's stored analytics data.
+
+    Results include the latest Meta observation, calculated day-over-day view
+    growth when two snapshots exist, and the newest validated trait extraction.
+    This tool is read-only: it never calls Meta or starts a model Run.
+    """
+    return _dashboard_client().list_recent_reels(limit)
+
+
+@mcp.tool()
+def get_reel_analytics(media_id: str, days: int = 30) -> dict:
+    """Read one Reel's stored observation history and newest validated traits.
+
+    `media_id` is Meta's media ID, returned by `list_recent_reels`. `days` is
+    bounded to 1–90 by the dashboard. This is a database read, not a fresh Meta
+    request or a video/model operation.
+    """
+    return _dashboard_client().get_reel_analytics(media_id, days)
+
+
+@mcp.tool()
+def get_instagram_post_status(
+    url: str,
+    max_comments: int = 50,
+    include_comments: bool = True,
+) -> dict:
+    """Fetch current public Instagram reel/post status and persist a snapshot.
+
+    Use for posted `/reel/...` or `/p/...` URLs when you need fresh engagement
+    numbers and a bounded sample of comments. Returns caption, hashtags, uploader,
+    `like_count`, `view_count`, `comment_count`, and up to `max_comments` ranked
+    ("Top") comments (each with a preview of its reply thread). Metadata comes from
+    yt-dlp; comments come from Instagram's web API and require a logged-in session
+    (`INSTAGRAM_COOKIES_FILE`). Each call is stored as a timestamped snapshot in the
+    `post_status` collection, so repeated calls build an engagement history.
+    """
+    _ensure_db()
+    status = fetch_instagram_post_status(
+        url=url,
+        max_comments=max_comments,
+        include_comments=include_comments,
+    )
+    fetched_at = datetime.now(timezone.utc)
+    snapshot = to_status_snapshot(status, fetched_at)
+    _post_status_store.insert(snapshot)
+    status["shortcode"] = snapshot["shortcode"]
+    status["fetched_at"] = fetched_at.isoformat()
+    return status
 
 
 API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()

@@ -24,7 +24,7 @@ _Avoid_: Context (overloaded with prompt-context), tags
 The act of turning a video input into an Artifact: download (if URL) → content-hash → transcribe → write Artifact. Index is fast and deterministic; per-prompt visual analysis happens later at run time, not here.
 
 **Run** (verb / noun):
-Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp)`. Runs are the unit the web UI displays.
+Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp, metadata)`. `metadata` is optional caller-supplied namespacing such as a trait-schema and prompt-version; it does not change prompt execution. Runs are the unit the web UI displays.
 _Avoid_: Analysis, query, request
 
 ## Relationships
@@ -37,4 +37,4 @@ _Avoid_: Analysis, query, request
 
 ## Flagged ambiguities
 
-- The current code's `analyses` enum mixes "which model/backend" (`gemini`, `multimodal`=TwelveLabs) with "what you're asking it to do" (`format_extraction`, `structured`). In the new model these are two orthogonal axes: a **Run** picks a prompt AND a model independently.
+- Historical code had an `analyses` enum that mixed "which model/backend" (`gemini`, `multimodal`=TwelveLabs) with "what you're asking it to do" (`format_extraction`, `structured`). In the current Artifact/Run model these are orthogonal: a **Run** picks a prompt and a `provider/model-id` independently (`google/gemini-2.5-pro`, `twelvelabs/pegasus1.5`).

@@ -73,6 +73,12 @@ class ArtifactStore:
             {"$set": {"gemini_file_ref": gemini_file_ref}},
         )
 
+    def update_twelvelabs_ref(self, content_hash: str, twelvelabs_video_id: str):
+        self._col.update_one(
+            {"content_hash": content_hash},
+            {"$set": {"twelvelabs_video_id": twelvelabs_video_id}},
+        )
+
     def get_by_hash(self, content_hash: str) -> Optional[dict]:
         doc = self._col.find_one({"content_hash": content_hash})
         return _clean(doc) if doc else None
@@ -102,6 +108,34 @@ class RunsStore:
     def list(self, artifact_hash: Optional[str] = None) -> list[dict]:
         query = {"artifact_hash": artifact_hash} if artifact_hash else {}
         docs = self._col.find(query).sort("created_at", DESCENDING)
+        return [_clean(d) for d in docs]
+
+
+class PostStatusStore:
+    """Snapshots of Instagram post status (engagement + comments) over time.
+
+    One document per fetch, keyed by `shortcode` + `fetched_at`, so repeated
+    fetches of the same post build a history you can diff later.
+    """
+
+    def __init__(self, db):
+        self._col = db["post_status"]
+        self._col.create_index([("shortcode", 1), ("fetched_at", DESCENDING)])
+
+    def insert(self, snapshot: dict) -> dict:
+        doc = {**snapshot}
+        doc.setdefault("fetched_at", datetime.now(timezone.utc))
+        self._col.insert_one(doc)
+        return _clean(doc)
+
+    def latest(self, shortcode: str) -> Optional[dict]:
+        doc = self._col.find_one(
+            {"shortcode": shortcode}, sort=[("fetched_at", DESCENDING)]
+        )
+        return _clean(doc) if doc else None
+
+    def history(self, shortcode: str) -> list[dict]:
+        docs = self._col.find({"shortcode": shortcode}).sort("fetched_at", DESCENDING)
         return [_clean(d) for d in docs]
 
 
