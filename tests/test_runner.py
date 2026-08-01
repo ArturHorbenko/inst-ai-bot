@@ -107,6 +107,18 @@ class RunPromptRoutingTest(unittest.TestCase):
         self.assertEqual(run["model"], "google/gemini-2.5-pro")
         self.assertEqual(store.gemini_updates, [("sha256:abc", "files/xyz")])
         self.assertEqual(store.twelvelabs_updates, [])
+        self.assertEqual(run["metadata"], {})
+
+    def test_run_persists_client_metadata(self):
+        store = FakeArtifactStore(_artifact())
+        runs = FakeRunsStore()
+        fake_gemini = SimpleNamespace(call_gemini=Mock(return_value=("{}", "files/xyz")))
+        with patch.dict(sys.modules, {"video_processor.gemini": fake_gemini}):
+            run = run_prompt(
+                "sha256:abc", "extract", "google/gemini-2.5-pro", "reel-traits/v1",
+                _config(), store, runs, metadata={"trait_schema": "reel-traits/v1"},
+            )
+        self.assertEqual(run["metadata"], {"trait_schema": "reel-traits/v1"})
 
     def test_twelvelabs_route_caches_video_id(self):
         store = FakeArtifactStore(_artifact())

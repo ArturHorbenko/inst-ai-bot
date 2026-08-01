@@ -23,6 +23,8 @@ class Config:
     INDEXING_TIMEOUT: int = 1800
     INDEXING_POLL_INTERVAL: int = 10
     SUPPORTED_VIDEO_FORMATS: str = "mp4,mov,avi,mkv,webm,m4v"
+    ANALYTICS_DASHBOARD_URL: str = None
+    ANALYTICS_DASHBOARD_API_KEY: str = None
 
 
 def get_config():
@@ -41,6 +43,8 @@ def get_config():
         INDEXING_TIMEOUT=int(os.environ.get("INDEXING_TIMEOUT", "1800")),
         INDEXING_POLL_INTERVAL=int(os.environ.get("INDEXING_POLL_INTERVAL", "10")),
         SUPPORTED_VIDEO_FORMATS=os.environ.get("SUPPORTED_VIDEO_FORMATS", "mp4,mov,avi,mkv,webm,m4v"),
+        ANALYTICS_DASHBOARD_URL=os.environ.get("ANALYTICS_DASHBOARD_URL"),
+        ANALYTICS_DASHBOARD_API_KEY=os.environ.get("ANALYTICS_DASHBOARD_API_KEY"),
     )
 
 
