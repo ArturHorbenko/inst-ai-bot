@@ -1,4 +1,5 @@
 import os
+import json
 import secrets
 import shutil
 import tempfile
@@ -7,12 +8,12 @@ import time
 import logging
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, Optional
+from typing import Any, Deque, Dict, Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from video_processor.config import get_config, validate_video_format
 from video_processor.store import DatabaseConnection, ArtifactStore, RunsStore, UrlCacheStore
@@ -126,17 +127,41 @@ def create_artifact_from_url(request: IndexUrlRequest):
 
 
 @app.post("/artifacts/upload", dependencies=[Depends(require_api_key)])
-def create_artifact_from_file(video: UploadFile = File(...)):
-    """Index an uploaded video file. Idempotent — returns existing artifact if already indexed."""
+def create_artifact_from_file(
+    video: UploadFile = File(...),
+    source_url: Optional[str] = Form(default=None),
+    source_type: str = Form(default="upload"),
+    source_metadata_json: Optional[str] = Form(default=None),
+):
+    """Index an uploaded video file with optional source provenance.
+
+    Callers that already have authorized video bytes can identify the Source
+    without sending the URL through the downloader path.
+    """
     if not validate_video_format(video.filename, config):
         raise HTTPException(status_code=400, detail=f"Unsupported format: {Path(video.filename).suffix}")
+    try:
+        source_metadata = json.loads(source_metadata_json) if source_metadata_json else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="source_metadata_json must be valid JSON")
+    if not isinstance(source_metadata, dict):
+        raise HTTPException(status_code=400, detail="source_metadata_json must be an object")
 
     temp_dir = Path(tempfile.mkdtemp(prefix="inst_ai_upload_"))
     try:
         dest = temp_dir / video.filename
         with open(dest, "wb") as f:
             shutil.copyfileobj(video.file, f)
-        return index_video(str(dest), config, artifact_store, url_cache)
+        return index_video(
+            str(dest),
+            config,
+            artifact_store,
+            url_cache,
+            source_url=source_url,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            source_fetcher="provided_upload" if source_url else None,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -163,6 +188,7 @@ class RunRequest(BaseModel):
     prompt: str
     model: str = "google/gemini-2.5-pro"
     label: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 @app.post("/runs", dependencies=[Depends(require_api_key)])
@@ -174,6 +200,7 @@ def create_run(request: RunRequest):
             prompt=request.prompt,
             model=request.model,
             label=request.label,
+            metadata=request.metadata,
             config=config,
             artifact_store=artifact_store,
             runs_store=runs_store,

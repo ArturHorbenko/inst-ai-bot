@@ -1,7 +1,7 @@
 import uuid
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from .store import ArtifactStore, RunsStore
 from . import gemini as gemini_module
@@ -17,6 +17,7 @@ def run_prompt(
     config,
     artifact_store: ArtifactStore,
     runs_store: RunsStore,
+    metadata: Optional[dict[str, Any]] = None,
 ) -> dict:
     """
     Execute an opaque prompt against an indexed artifact. Returns the stored run record.
@@ -46,6 +47,7 @@ def run_prompt(
         "prompt": prompt,
         "model": model,
         "label": label,
+        "metadata": metadata or {},
         "output": output,
         "created_at": datetime.now(timezone.utc),
     }

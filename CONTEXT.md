@@ -24,7 +24,7 @@ _Avoid_: Context (overloaded with prompt-context), tags
 The act of turning a video input into an Artifact: download (if URL) → content-hash → transcribe → write Artifact. Index is fast and deterministic; per-prompt visual analysis happens later at run time, not here.
 
 **Run** (verb / noun):
-Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp)`. Runs are the unit the web UI displays.
+Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp, metadata)`. `metadata` is optional caller-supplied namespacing such as a trait-schema and prompt-version; it does not change prompt execution. Runs are the unit the web UI displays.
 _Avoid_: Analysis, query, request
 
 ## Relationships

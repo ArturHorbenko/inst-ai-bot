@@ -1,9 +1,12 @@
 """MCP server fronting the inst-ai-bot artifact/run primitives.
 
-Exposes three tools over Streamable HTTP:
+Exposes read/write Artifact primitives plus read-only dashboard analytics tools
+over Streamable HTTP:
   - index_video_from_url(url)
-  - run_prompt(artifact_hash, prompt, model?, label?)
+  - run_prompt(artifact_hash, prompt, model?, label?, metadata?)
   - get_artifact(content_hash)
+  - list_recent_reels(limit?)
+  - get_reel_analytics(media_id, days?)
 
 Auth: Bearer token in `Authorization: Bearer <key>`; must match
 `INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
@@ -23,6 +26,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 
 from .config import get_config
+from .dashboard_analytics import DashboardAnalyticsClient
 from .indexer import index_video
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
 from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
@@ -51,6 +55,7 @@ _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
 _url_cache: Optional[UrlCacheStore] = None
+_dashboard_analytics: Optional[DashboardAnalyticsClient] = None
 
 
 def _ensure_db() -> None:
@@ -62,6 +67,16 @@ def _ensure_db() -> None:
     _artifact_store = ArtifactStore(_db.db)
     _runs_store = RunsStore(_db.db)
     _url_cache = UrlCacheStore(_db.db)
+
+
+def _dashboard_client() -> DashboardAnalyticsClient:
+    global _dashboard_analytics
+    if _dashboard_analytics is None:
+        _dashboard_analytics = DashboardAnalyticsClient(
+            _config.ANALYTICS_DASHBOARD_URL,
+            _config.ANALYTICS_DASHBOARD_API_KEY,
+        )
+    return _dashboard_analytics
 
 
 def _trim_artifact(artifact: dict) -> dict:
@@ -106,13 +121,15 @@ def run_prompt(
     prompt: str,
     model: str = "google/gemini-2.5-pro",
     label: Optional[str] = None,
+    metadata: Optional[dict] = None,
 ) -> dict:
     """Run an opaque multimodal prompt against an indexed artifact.
 
     `artifact_hash` must be a `content_hash` returned by `index_video_from_url`.
     `model` uses `provider/model-id` format (e.g. `google/gemini-2.5-pro`); only
     the `google` provider is wired today. `label` is an optional tag for grouping
-    runs in the log view. Returns `{run_id, output}`.
+    runs in the log view. `metadata` optionally records a stable caller namespace
+    such as a trait schema and prompt version. Returns `{run_id, output}`.
     """
     _ensure_db()
     try:
@@ -124,6 +141,7 @@ def run_prompt(
             config=_config,
             artifact_store=_artifact_store,
             runs_store=_runs_store,
+            metadata=metadata,
         )
     except ArtifactNotFound as e:
         raise ValueError(str(e))
@@ -142,6 +160,26 @@ def get_artifact(content_hash: str) -> dict:
     return _trim_artifact(artifact)
 
 
+@mcp.tool()
+def list_recent_reels(limit: int = 10) -> list[dict]:
+    """Read up to 25 recent Reels from the dashboard's stored analytics data.
+
+    Results include the latest Meta observation, calculated day-over-day view
+    growth when two snapshots exist, and the newest validated trait extraction.
+    This tool is read-only: it never calls Meta or starts a model Run.
+    """
+    return _dashboard_client().list_recent_reels(limit)
+
+
+@mcp.tool()
+def get_reel_analytics(media_id: str, days: int = 30) -> dict:
+    """Read one Reel's stored observation history and newest validated traits.
+
+    `media_id` is Meta's media ID, returned by `list_recent_reels`. `days` is
+    bounded to 1–90 by the dashboard. This is a database read, not a fresh Meta
+    request or a video/model operation.
+    """
+    return _dashboard_client().get_reel_analytics(media_id, days)
 API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()
 if API_KEY:
     logger.info("MCP bearer auth: ENABLED")
