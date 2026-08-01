@@ -10,14 +10,14 @@ class DashboardAnalyticsClient:
         self._api_key = api_key
         self._transport = transport or httpx.get
 
-    def _get(self, params: dict) -> dict:
+    def _get(self, path: str, params: dict) -> dict:
         if not self._base_url or not self._api_key:
             raise RuntimeError(
                 "Dashboard analytics is not configured. Set ANALYTICS_DASHBOARD_URL and ANALYTICS_DASHBOARD_API_KEY."
             )
         try:
             response = self._transport(
-                f"{self._base_url}/api/internal/mcp/reels",
+                f"{self._base_url}{path}",
                 params=params,
                 headers={"X-MCP-Read-Secret": self._api_key},
                 timeout=15,
@@ -33,7 +33,10 @@ class DashboardAnalyticsClient:
         return payload
 
     def list_recent_reels(self, limit: int = 10) -> list[dict]:
-        return self._get({"limit": limit})["reels"]
+        return self._get("/api/internal/mcp/reels", {"limit": limit})["reels"]
 
     def get_reel_analytics(self, media_id: str, days: int = 30) -> dict:
-        return self._get({"mediaId": media_id, "days": days})["reel"]
+        return self._get("/api/internal/mcp/reels", {"mediaId": media_id, "days": days})["reel"]
+
+    def get_content_audit(self, days: int = 30) -> dict:
+        return self._get("/api/internal/mcp/audit", {"days": days})["audit"]

@@ -7,6 +7,7 @@ over Streamable HTTP:
   - get_artifact(content_hash)
   - list_recent_reels(limit?)
   - get_reel_analytics(media_id, days?)
+  - content_audit(days?)
 
 Auth: Bearer token in `Authorization: Bearer <key>`; must match
 `INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
@@ -180,6 +181,17 @@ def get_reel_analytics(media_id: str, days: int = 30) -> dict:
     request or a video/model operation.
     """
     return _dashboard_client().get_reel_analytics(media_id, days)
+
+
+@mcp.tool()
+def content_audit(days: int = 30) -> dict:
+    """Summarize the last N days of stored Reel performance (1–365 days).
+
+    Returns data coverage, personal medians, leaders by views/share/save rate,
+    and available format comparisons. It reads stored dashboard observations
+    only; it never calls Meta or starts a model Run.
+    """
+    return _dashboard_client().get_content_audit(days)
 API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()
 if API_KEY:
     logger.info("MCP bearer auth: ENABLED")

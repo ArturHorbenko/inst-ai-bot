@@ -22,6 +22,15 @@ class DashboardAnalyticsClientTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not configured"):
             DashboardAnalyticsClient(None, None).get_reel_analytics("reel-1")
 
+    def test_reads_an_n_day_content_audit(self):
+        def transport(url, **kwargs):
+            self.assertEqual(url, "https://dashboard.example/api/internal/mcp/audit")
+            self.assertEqual(kwargs["params"], {"days": 14})
+            return SimpleNamespace(is_success=True, json=lambda: {"ok": True, "audit": {"window": {"days": 14}}})
+
+        audit = DashboardAnalyticsClient("https://dashboard.example", "read-secret", transport=transport).get_content_audit(14)
+        self.assertEqual(audit["window"]["days"], 14)
+
     def test_surfaces_dashboard_errors(self):
         response = SimpleNamespace(is_success=False, status_code=404, json=lambda: {"ok": False, "error": "Reel not found."})
         with self.assertRaisesRegex(RuntimeError, "Reel not found"):
