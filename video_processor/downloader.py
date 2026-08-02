@@ -75,7 +75,7 @@ def _build_metadata(info: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def download_instagram_reel(url: str, dest_dir: Path) -> Tuple[Path, Dict[str, Any]]:
+def download_instagram_reel(url: str, dest_dir: Path, cookie_file: Path | None = None) -> Tuple[Path, Dict[str, Any]]:
     """Download an Instagram reel via yt-dlp; return (video_path, metadata)."""
     if not _is_instagram_reel_url(url):
         raise ValueError(
@@ -95,6 +95,10 @@ def download_instagram_reel(url: str, dest_dir: Path) -> Tuple[Path, Dict[str, A
         "no_warnings": True,
         "getcomments": True,
     }
+
+    if cookie_file and cookie_file.is_file():
+        ydl_opts['cookiefile'] = str(cookie_file)
+        logger.info('Using configured Instagram cookie file.')
 
     logger.info(f"Downloading Instagram reel: {url}")
     try:

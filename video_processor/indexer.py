@@ -43,7 +43,11 @@ def index_video(
     temp_dir = Path(tempfile.mkdtemp(prefix="inst_ai_index_"))
     try:
         if is_url:
-            video_path, source_metadata = download_instagram_reel(source, temp_dir)
+            video_path, source_metadata = download_instagram_reel(
+                source,
+                temp_dir,
+                cookie_file=Path(getattr(config, "INSTAGRAM_COOKIES_FILE", "secrets/instagram-cookies.txt")),
+            )
             platform = _detect_platform(source)
             provenance_url = source
             fetcher = "yt-dlp"
