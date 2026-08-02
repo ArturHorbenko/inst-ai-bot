@@ -8,7 +8,7 @@ import time
 import logging
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from video_processor.config import get_config, validate_video_format
 from video_processor.store import DatabaseConnection, ArtifactStore, RunsStore, UrlCacheStore
 from video_processor.indexer import index_video
+from video_processor.image_indexer import index_images
 from video_processor.runner import run_prompt, ArtifactNotFound
 
 logging.basicConfig(level=logging.INFO)
@@ -164,6 +165,52 @@ def create_artifact_from_file(
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@app.post("/artifacts/images", dependencies=[Depends(require_api_key)])
+def create_artifact_from_images(
+    images: List[UploadFile] = File(...),
+    source_url: Optional[str] = Form(default=None),
+    source_type: str = Form(default="upload"),
+    source_metadata_json: Optional[str] = Form(default=None),
+):
+    """Index one authorized image or an ordered Instagram-style image carousel."""
+    try:
+        source_metadata = json.loads(source_metadata_json) if source_metadata_json else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="source_metadata_json must be valid JSON")
+    if not isinstance(source_metadata, dict):
+        raise HTTPException(status_code=400, detail="source_metadata_json must be an object")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="inst_ai_images_"))
+    try:
+        image_paths = []
+        for index, image in enumerate(images):
+            # Keep the original extension for format validation, while ensuring
+            # duplicate client filenames cannot overwrite a previous slide.
+            filename = Path(image.filename or f"image-{index}.bin").name
+            destination = temp_dir / str(index) / filename
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with open(destination, "wb") as file:
+                shutil.copyfileobj(image.file, file)
+            image_paths.append(destination)
+        return index_images(
+            image_paths,
+            config,
+            artifact_store,
+            url_cache,
+            source_url=source_url,
+            source_type=source_type,
+            source_metadata=source_metadata,
+            source_fetcher="provided_upload",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("Image indexing failed")
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
