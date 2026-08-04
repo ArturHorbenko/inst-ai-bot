@@ -24,7 +24,7 @@ _Avoid_: Context (overloaded with prompt-context), tags
 The act of turning a video input into an Artifact: download (if URL) → content-hash → transcribe → write Artifact. Index is fast and deterministic; per-prompt visual analysis happens later at run time, not here.
 
 **Run** (verb / noun):
-Executing a prompt against an Artifact with a chosen model, producing an output. As a noun: the stored record `(artifact, prompt, model, output, timestamp, metadata)`. `metadata` is optional caller-supplied namespacing such as a trait-schema and prompt-version; it does not change prompt execution. Runs are the unit the web UI displays.
+Executing a prompt against an Artifact or a text-only input with a chosen model, producing an output. As a noun: the stored record `(input provenance, prompt, model, output, timestamp, metadata)`. Artifact Runs reference exactly one Artifact; text-only Runs explicitly have no Artifact. `metadata` is optional caller-supplied namespacing such as a trait-schema and prompt-version; it does not change prompt execution. Runs are the unit the web UI displays.
 _Avoid_: Analysis, query, request
 
 ## Relationships
@@ -32,7 +32,8 @@ _Avoid_: Analysis, query, request
 - An **Artifact** has exactly one **Content hash** (its identity)
 - An **Artifact** has one or more **Sources**
 - A **Source** has one **Metadata** blob (possibly empty)
-- A **Run** targets exactly one **Artifact** with exactly one prompt + model
+- An **Artifact Run** targets exactly one **Artifact** with exactly one prompt + model
+- A **text-only Run** has explicit text-only provenance and no **Artifact**
 - Pasting the same URL twice resolves to the same **Artifact**; a fresh **Source** entry may be appended if content (caption/comments) has changed
 
 ## Flagged ambiguities

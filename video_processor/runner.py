@@ -1,6 +1,7 @@
 import uuid
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 MAX_CONTEXT_CHARS = 48_000
+TEXT_ONLY_MODEL_PATTERN = re.compile(
+    r"^google/gemini-3\.5-flash(?:[-_.][A-Za-z0-9][A-Za-z0-9_.-]*)?$"
+)
 
 
 def _truncate_context(value: str) -> str:
@@ -106,6 +110,47 @@ def run_prompt(
         "created_at": datetime.now(timezone.utc),
     }
 
+    return runs_store.insert(run)
+
+
+def is_supported_text_model(model: str) -> bool:
+    """Return whether a model is an approved Google Gemini 3.5 Flash text model."""
+    return bool(TEXT_ONLY_MODEL_PATTERN.fullmatch(model))
+
+
+def run_text_prompt(
+    prompt: str,
+    model: str,
+    label: Optional[str],
+    config,
+    runs_store: RunsStore,
+    metadata: Optional[dict[str, Any]] = None,
+) -> dict:
+    """Execute and persist a text-only Gemini Run without creating an Artifact."""
+    if not is_supported_text_model(model):
+        raise ValueError("Text-only runs require a google/gemini-3.5-flash-compatible model")
+
+    provider, model_id = _parse_model(model)
+    if provider != "google":
+        raise NotImplementedError(f"Provider '{provider}' not yet supported. Implemented: google")
+
+    output = gemini_module.call_gemini_text(
+        api_key=config.GEMINI_API_KEY,
+        prompt=prompt,
+        model=model_id,
+    )
+    run = {
+        "run_id": str(uuid.uuid4()),
+        "input_type": "text",
+        "artifact_hash": None,
+        "prompt": prompt,
+        "model": model,
+        "label": label,
+        "metadata": metadata or {},
+        "provenance": {"input": "text_only", "artifact": None},
+        "output": output,
+        "created_at": datetime.now(timezone.utc),
+    }
     return runs_store.insert(run)
 
 

@@ -25,3 +25,28 @@ TwelveLabs SDK baseline:
 
 To disable multimodal analysis at server startup, set:
 - `ENABLE_MULTIMODAL_ANALYSIS=false`
+
+## Runs API
+
+Artifact runs retain their existing contract: send `artifact`, `prompt`, and
+optionally `model`, `label`, and `metadata` to `POST /runs`.
+
+Text-only runs are available for requests such as dashboard comment sentiment
+that do not have video bytes. Use `POST /runs/text`, or `POST /runs` without
+an `artifact` field for compatibility with existing dashboard callers:
+
+```json
+{
+  "prompt": "Return JSON only: {\"comment\": \"Great post\"}",
+  "model": "google/gemini-3.5-flash",
+  "label": "comment-sentiment/v1",
+  "metadata": {"source": "dashboard"}
+}
+```
+
+Text-only prompts may be up to 48,000 characters and must use a
+`google/gemini-3.5-flash`-compatible model ID. The prompt is passed to Gemini
+unchanged, so JSON instructions and JSON payloads are supported. Text-only
+runs are stored with `input_type: "text"` and explicit text-only provenance;
+they have no Artifact. Prompts are not written to application logs. All run
+endpoints use the existing `X-API-Key` authentication when it is configured.

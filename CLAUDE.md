@@ -116,6 +116,11 @@ All endpoints are synchronous. FastAPI runs sync handlers in a thread pool autom
 }
 ```
 
+For text-only work such as dashboard comment sentiment, use `POST /runs/text`
+or omit `artifact` from `POST /runs`. Text-only requests use a
+`google/gemini-3.5-flash`-compatible model, accept prompts up to 48,000
+characters, and persist `input_type: "text"` with no Artifact reference.
+
 **`GET /runs?artifact={hash}`** — List runs, optionally filtered by artifact hash.
 
 **`GET /runs/{run_id}`** — Get a single run by ID.

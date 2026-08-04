@@ -30,6 +30,18 @@ def call_gemini(
     return response.text, video_file.name
 
 
+def call_gemini_text(
+    api_key: str,
+    prompt: str,
+    model: str = "gemini-3.5-flash",
+) -> str:
+    """Run a text-only prompt without creating or uploading a Gemini File."""
+    client = genai.Client(api_key=api_key)
+    logger.info("Calling text-only Gemini model %s", model)
+    response = client.models.generate_content(model=model, contents=prompt)
+    return response.text
+
+
 def _get_or_upload(client: genai.Client, video_path: str, gemini_file_ref: Optional[str]):
     """Reuse an existing Gemini file if still ACTIVE, otherwise upload fresh."""
     if gemini_file_ref:

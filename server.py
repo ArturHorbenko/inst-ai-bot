@@ -8,18 +8,23 @@ import time
 import logging
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Union
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Header, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 from video_processor.config import get_config, validate_video_format
 from video_processor.store import DatabaseConnection, ArtifactStore, RunsStore, UrlCacheStore
 from video_processor.indexer import index_video
 from video_processor.image_indexer import index_images
-from video_processor.runner import run_prompt, ArtifactNotFound
+from video_processor.runner import (
+    ArtifactNotFound,
+    is_supported_text_model,
+    run_prompt,
+    run_text_prompt,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -230,7 +235,7 @@ def get_artifact(content_hash: str):
 
 # ── Runs ──────────────────────────────────────────────────────────────────────
 
-class RunRequest(BaseModel):
+class ArtifactRunRequest(BaseModel):
     artifact: str
     prompt: str
     model: str = "google/gemini-2.5-pro"
@@ -238,16 +243,65 @@ class RunRequest(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-@app.post("/runs", dependencies=[Depends(require_api_key)])
-def create_run(request: RunRequest):
-    """Run an opaque prompt against an indexed artifact."""
+class TextRunRequest(BaseModel):
+    """A direct text generation request; no Artifact is created or implied."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str = Field(min_length=1, max_length=48_000)
+    model: str = "google/gemini-3.5-flash"
+    label: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("prompt")
+    @classmethod
+    def prompt_must_contain_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("prompt must contain non-whitespace text")
+        return value
+
+    @field_validator("model")
+    @classmethod
+    def model_must_support_text_runs(cls, value: str) -> str:
+        if not is_supported_text_model(value):
+            raise ValueError("text-only runs require a google/gemini-3.5-flash-compatible model")
+        return value
+
+
+class RunRequest(RootModel[Union[ArtifactRunRequest, TextRunRequest]]):
+    """Select an artifact Run when `artifact` is supplied, otherwise a text-only Run."""
+
+
+def _create_text_run(request: TextRunRequest):
     try:
-        return run_prompt(
-            artifact_hash=request.artifact,
+        return run_text_prompt(
             prompt=request.prompt,
             model=request.model,
             label=request.label,
             metadata=request.metadata,
+            config=config,
+            runs_store=runs_store,
+        )
+    except Exception:
+        # Prompts can include private comments. Do not put provider exceptions in logs.
+        logger.error("Text-only run failed")
+        raise HTTPException(status_code=500, detail="Text-only run failed")
+
+
+@app.post("/runs", dependencies=[Depends(require_api_key)])
+def create_run(request: RunRequest):
+    """Run an opaque prompt against an Artifact or execute a validated text-only Run."""
+    if isinstance(request.root, TextRunRequest):
+        return _create_text_run(request.root)
+
+    artifact_request = request.root
+    try:
+        return run_prompt(
+            artifact_hash=artifact_request.artifact,
+            prompt=artifact_request.prompt,
+            model=artifact_request.model,
+            label=artifact_request.label,
+            metadata=artifact_request.metadata,
             config=config,
             artifact_store=artifact_store,
             runs_store=runs_store,
@@ -259,6 +313,12 @@ def create_run(request: RunRequest):
     except Exception as e:
         logger.error(f"Run failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/runs/text", dependencies=[Depends(require_api_key)])
+def create_text_run(request: TextRunRequest):
+    """Execute a text-only Run. Equivalent to POST /runs without `artifact`."""
+    return _create_text_run(request)
 
 
 @app.get("/runs", dependencies=[Depends(require_api_key)])
