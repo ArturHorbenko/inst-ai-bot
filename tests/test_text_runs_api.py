@@ -21,6 +21,10 @@ if "google.genai" not in sys.modules:
 import server
 
 
+def authenticated_client():
+    return TestClient(server.app, headers={"X-API-Key": server.API_KEY})
+
+
 def test_post_runs_without_an_artifact_creates_a_text_only_run():
     stored_run = {
         "run_id": "text-run-1",
@@ -34,7 +38,7 @@ def test_post_runs_without_an_artifact_creates_a_text_only_run():
     }
 
     with patch("server.run_text_prompt", Mock(return_value=stored_run)) as run_text:
-        response = TestClient(server.app).post(
+        response = authenticated_client().post(
             "/runs",
             json={
                 "prompt": 'Return JSON for this comment: {"comment":"Great post"}',
@@ -60,7 +64,7 @@ def test_post_runs_keeps_artifact_runs_on_the_existing_runner():
     stored_run = {"run_id": "artifact-run-1", "artifact_hash": "sha256:video"}
 
     with patch("server.run_prompt", Mock(return_value=stored_run)) as run_prompt:
-        response = TestClient(server.app).post(
+        response = authenticated_client().post(
             "/runs",
             json={"artifact": "sha256:video", "prompt": "Analyze this video."},
         )
@@ -80,7 +84,7 @@ def test_post_runs_keeps_artifact_runs_on_the_existing_runner():
 
 
 def test_text_runs_reject_unsupported_model_and_oversized_prompt():
-    client = TestClient(server.app)
+    client = authenticated_client()
 
     unsupported_model = client.post(
         "/runs",
@@ -114,7 +118,7 @@ def test_text_runs_require_the_same_api_key(monkeypatch):
 def test_text_run_failures_do_not_log_the_prompt(caplog):
     prompt = "private comment text must not appear in logs"
     with patch("server.run_text_prompt", Mock(side_effect=RuntimeError(prompt))):
-        response = TestClient(server.app).post(
+        response = authenticated_client().post(
             "/runs", json={"prompt": prompt, "model": "google/gemini-3.5-flash"}
         )
 
@@ -140,7 +144,7 @@ def test_runs_do_not_expose_prompts_from_text_only_runs(monkeypatch):
     store.list.return_value = [text_run, artifact_run]
     store.get.side_effect = lambda run_id: text_run if run_id == text_run["run_id"] else artifact_run
     monkeypatch.setattr(server, "runs_store", store)
-    client = TestClient(server.app)
+    client = authenticated_client()
 
     listed = client.get("/runs")
     fetched_text = client.get(f'/runs/{text_run["run_id"]}')
