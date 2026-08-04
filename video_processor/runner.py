@@ -1,5 +1,6 @@
 import uuid
 import json
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -126,7 +127,7 @@ def run_text_prompt(
     runs_store: RunsStore,
     metadata: Optional[dict[str, Any]] = None,
 ) -> dict:
-    """Execute and persist a text-only Gemini Run without creating an Artifact."""
+    """Execute a text-only Gemini Run without persisting its raw prompt."""
     if not is_supported_text_model(model):
         raise ValueError("Text-only runs require a google/gemini-3.5-flash-compatible model")
 
@@ -143,7 +144,8 @@ def run_text_prompt(
         "run_id": str(uuid.uuid4()),
         "input_type": "text",
         "artifact_hash": None,
-        "prompt": prompt,
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "prompt_length": len(prompt),
         "model": model,
         "label": label,
         "metadata": metadata or {},

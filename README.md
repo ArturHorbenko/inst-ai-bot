@@ -48,5 +48,8 @@ Text-only prompts may be up to 48,000 characters and must use a
 `google/gemini-3.5-flash`-compatible model ID. The prompt is passed to Gemini
 unchanged, so JSON instructions and JSON payloads are supported. Text-only
 runs are stored with `input_type: "text"` and explicit text-only provenance;
-they have no Artifact. Prompts are not written to application logs. All run
-endpoints use the existing `X-API-Key` authentication when it is configured.
+they have no Artifact. Text-only Runs never persist or return the raw prompt:
+they store `prompt_sha256` (a SHA-256 digest) and `prompt_length` instead.
+Prompts are not written to application logs. Artifact Runs retain their
+existing prompt persistence behavior. All run endpoints use the existing
+`X-API-Key` authentication when it is configured.

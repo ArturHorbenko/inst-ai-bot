@@ -120,3 +120,33 @@ def test_text_run_failures_do_not_log_the_prompt(caplog):
 
     assert response.status_code == 500
     assert prompt not in caplog.text
+
+
+def test_runs_do_not_expose_prompts_from_text_only_runs(monkeypatch):
+    private_prompt = 'Return JSON for this comment: {"comment":"private comment"}'
+    text_run = {
+        "run_id": "legacy-text-run",
+        "input_type": "text",
+        "prompt": private_prompt,
+        "prompt_sha256": "a" * 64,
+        "prompt_length": len(private_prompt),
+    }
+    artifact_run = {
+        "run_id": "artifact-run",
+        "artifact_hash": "sha256:video",
+        "prompt": "Analyze this video.",
+    }
+    store = Mock()
+    store.list.return_value = [text_run, artifact_run]
+    store.get.side_effect = lambda run_id: text_run if run_id == text_run["run_id"] else artifact_run
+    monkeypatch.setattr(server, "runs_store", store)
+    client = TestClient(server.app)
+
+    listed = client.get("/runs")
+    fetched_text = client.get(f'/runs/{text_run["run_id"]}')
+    fetched_artifact = client.get(f'/runs/{artifact_run["run_id"]}')
+
+    assert listed.status_code == 200
+    assert private_prompt not in listed.text
+    assert "prompt" not in fetched_text.json()
+    assert fetched_artifact.json()["prompt"] == "Analyze this video."

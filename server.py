@@ -274,18 +274,31 @@ class RunRequest(RootModel[Union[ArtifactRunRequest, TextRunRequest]]):
 
 def _create_text_run(request: TextRunRequest):
     try:
-        return run_text_prompt(
-            prompt=request.prompt,
-            model=request.model,
-            label=request.label,
-            metadata=request.metadata,
-            config=config,
-            runs_store=runs_store,
+        return _public_run(
+            run_text_prompt(
+                prompt=request.prompt,
+                model=request.model,
+                label=request.label,
+                metadata=request.metadata,
+                config=config,
+                runs_store=runs_store,
+            )
         )
     except Exception:
         # Prompts can include private comments. Do not put provider exceptions in logs.
         logger.error("Text-only run failed")
         raise HTTPException(status_code=500, detail="Text-only run failed")
+
+
+def _public_run(run: dict) -> dict:
+    """Hide raw prompts from text-only Runs, including legacy persisted records."""
+    is_text_only = (
+        run.get("input_type") == "text"
+        or (run.get("provenance") or {}).get("input") == "text_only"
+    )
+    if not is_text_only:
+        return run
+    return {key: value for key, value in run.items() if key != "prompt"}
 
 
 @app.post("/runs", dependencies=[Depends(require_api_key)])
@@ -323,7 +336,7 @@ def create_text_run(request: TextRunRequest):
 
 @app.get("/runs", dependencies=[Depends(require_api_key)])
 def list_runs(artifact: Optional[str] = None):
-    return runs_store.list(artifact_hash=artifact)
+    return [_public_run(run) for run in runs_store.list(artifact_hash=artifact)]
 
 
 @app.get("/runs/{run_id}", dependencies=[Depends(require_api_key)])
@@ -331,7 +344,7 @@ def get_run(run_id: str):
     run = runs_store.get(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run
+    return _public_run(run)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

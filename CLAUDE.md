@@ -120,6 +120,9 @@ For text-only work such as dashboard comment sentiment, use `POST /runs/text`
 or omit `artifact` from `POST /runs`. Text-only requests use a
 `google/gemini-3.5-flash`-compatible model, accept prompts up to 48,000
 characters, and persist `input_type: "text"` with no Artifact reference.
+Their raw prompts are not persisted or exposed by `/runs`; text-only Run
+records include only `prompt_sha256` and `prompt_length` for prompt tracking.
+Artifact Runs retain their existing prompt persistence behavior.
 
 **`GET /runs?artifact={hash}`** — List runs, optionally filtered by artifact hash.
 
