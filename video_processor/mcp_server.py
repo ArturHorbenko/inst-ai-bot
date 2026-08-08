@@ -29,6 +29,11 @@ from starlette.responses import JSONResponse
 from .config import get_config
 from .dashboard_analytics import DashboardAnalyticsClient
 from .indexer import index_video
+from .retrieval import (
+    RetrievalStore,
+    resolve_retrieval_contract,
+    search_retrieval_documents,
+)
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
 from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
 
@@ -41,7 +46,8 @@ mcp = FastMCP(
         "Primitives for indexing and querying short-form videos (e.g. Instagram reels).\n\n"
         "Typical flow:\n"
         "  1) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
-        "  2) run_prompt(artifact_hash=content_hash, prompt=...) -> {output}\n\n"
+        "  2) search_videos(query) -> matching videos and timestamped moments\n"
+        "  3) get_video_context(content_hash, media_id?) -> evidence for an answer\n\n"
         "Indexing is idempotent (content-hash addressed); re-calling index_video_from_url "
         "with the same URL is a cheap cache hit."
     ),
@@ -56,11 +62,12 @@ _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
 _url_cache: Optional[UrlCacheStore] = None
+_retrieval_store: Optional[RetrievalStore] = None
 _dashboard_analytics: Optional[DashboardAnalyticsClient] = None
 
 
 def _ensure_db() -> None:
-    global _artifact_store, _runs_store, _url_cache
+    global _artifact_store, _runs_store, _url_cache, _retrieval_store
     if _artifact_store is not None:
         return
     if not _db.connect():
@@ -68,6 +75,7 @@ def _ensure_db() -> None:
     _artifact_store = ArtifactStore(_db.db)
     _runs_store = RunsStore(_db.db)
     _url_cache = UrlCacheStore(_db.db)
+    _retrieval_store = RetrievalStore(_db.db)
 
 
 def _dashboard_client() -> DashboardAnalyticsClient:
@@ -159,6 +167,79 @@ def get_artifact(content_hash: str) -> dict:
     if not artifact:
         raise ValueError(f"Artifact not found: {content_hash}")
     return _trim_artifact(artifact)
+
+
+@mcp.tool()
+def search_videos(
+    query: str,
+    limit: int = 8,
+    trait_schema: Optional[str] = None,
+    prompt_version: Optional[str] = None,
+) -> list[dict]:
+    """Semantic-search indexed videos and timestamped moments with Atlas Vector Search.
+
+    Use this first for questions such as "find a Reel about fence installation" or
+    "where does a creator use a running-away punchline?" Results include the
+    matching artifact hash, dashboard media ID, timestamp range, retrieval text,
+    and a similarity score. It only searches documents created by
+    the active `reel-retrieval/v1` / `2026-08-07` contract by default; it never
+    downloads video or invokes a video model. Supply both `trait_schema` and
+    `prompt_version` only to query one other explicit contract.
+    """
+    _ensure_db()
+    try:
+        return search_retrieval_documents(
+            store=_retrieval_store,
+            config=_config,
+            query=query,
+            limit=limit,
+            trait_schema=trait_schema,
+            prompt_version=prompt_version,
+        )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Atlas vector search failed")
+        raise RuntimeError(
+            "Video search is unavailable. Confirm Atlas Vector Search is enabled and "
+            "the configured ATLAS_VECTOR_INDEX exists."
+        ) from exc
+
+
+@mcp.tool()
+def get_video_context(
+    content_hash: str,
+    media_id: Optional[str] = None,
+    trait_schema: Optional[str] = None,
+    prompt_version: Optional[str] = None,
+) -> dict:
+    """Get the stored retrieval chunks and source transcript for one indexed video.
+
+    Call this after `search_videos` with its `content_hash` (and `media_id` when
+    provided) before answering a detailed question. This is a read-only MongoDB
+    lookup; it does not rerun an embedding or Gemini video analysis. It returns
+    only the active `reel-retrieval/v1` / `2026-08-07` contract by default.
+    Supply both version fields only to select another explicit contract.
+    """
+    _ensure_db()
+    artifact = _artifact_store.get_by_hash(content_hash)
+    if not artifact:
+        raise ValueError(f"Artifact not found: {content_hash}")
+    contract = resolve_retrieval_contract(
+        trait_schema=trait_schema,
+        prompt_version=prompt_version,
+    )
+    return {
+        "content_hash": content_hash,
+        "media_id": media_id,
+        "retrieval_documents": _retrieval_store.get_context(
+            content_hash=content_hash,
+            media_id=media_id,
+            contract=contract,
+        ),
+        "transcript": (artifact.get("transcript") or {}).get("segments") or [],
+        "sources": artifact.get("sources") or [],
+    }
 
 
 @mcp.tool()

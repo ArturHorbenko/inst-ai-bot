@@ -26,6 +26,11 @@ class Config:
     INSTAGRAM_COOKIES_FILE: str = "secrets/instagram-cookies.txt"
     ANALYTICS_DASHBOARD_URL: str = None
     ANALYTICS_DASHBOARD_API_KEY: str = None
+    RETRIEVAL_EMBEDDING_MODEL: str = "gemini-embedding-001"
+    RETRIEVAL_EMBEDDING_DIMENSIONS: int = 768
+    ATLAS_VECTOR_INDEX: str = "video_retrieval_vector"
+    ATLAS_VECTOR_INDEX_TIMEOUT: int = 300
+    ATLAS_VECTOR_INDEX_POLL_INTERVAL: int = 5
 
 
 def get_config():
@@ -47,6 +52,11 @@ def get_config():
         INSTAGRAM_COOKIES_FILE=os.environ.get("INSTAGRAM_COOKIES_FILE", "secrets/instagram-cookies.txt"),
         ANALYTICS_DASHBOARD_URL=os.environ.get("ANALYTICS_DASHBOARD_URL"),
         ANALYTICS_DASHBOARD_API_KEY=os.environ.get("ANALYTICS_DASHBOARD_API_KEY"),
+        RETRIEVAL_EMBEDDING_MODEL=os.environ.get("RETRIEVAL_EMBEDDING_MODEL", "gemini-embedding-001"),
+        RETRIEVAL_EMBEDDING_DIMENSIONS=int(os.environ.get("RETRIEVAL_EMBEDDING_DIMENSIONS", "768")),
+        ATLAS_VECTOR_INDEX=os.environ.get("ATLAS_VECTOR_INDEX", "video_retrieval_vector"),
+        ATLAS_VECTOR_INDEX_TIMEOUT=int(os.environ.get("ATLAS_VECTOR_INDEX_TIMEOUT", "300")),
+        ATLAS_VECTOR_INDEX_POLL_INTERVAL=int(os.environ.get("ATLAS_VECTOR_INDEX_POLL_INTERVAL", "5")),
     )
 
 

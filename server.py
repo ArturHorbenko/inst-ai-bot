@@ -19,6 +19,7 @@ from video_processor.config import get_config, validate_video_format
 from video_processor.store import DatabaseConnection, ArtifactStore, RunsStore, UrlCacheStore
 from video_processor.indexer import index_video
 from video_processor.image_indexer import index_images
+from video_processor.retrieval import RetrievalStore, index_retrieval_documents
 from video_processor.runner import (
     ArtifactNotFound,
     is_supported_text_model,
@@ -97,16 +98,18 @@ db_connection = DatabaseConnection(config)
 artifact_store: ArtifactStore = None
 runs_store: RunsStore = None
 url_cache: UrlCacheStore = None
+retrieval_store: RetrievalStore = None
 
 
 @app.on_event("startup")
 async def startup():
-    global artifact_store, runs_store, url_cache
+    global artifact_store, runs_store, url_cache, retrieval_store
     if not db_connection.connect():
         raise RuntimeError("MongoDB connection required")
     artifact_store = ArtifactStore(db_connection.db)
     runs_store = RunsStore(db_connection.db)
     url_cache = UrlCacheStore(db_connection.db)
+    retrieval_store = RetrievalStore(db_connection.db)
     logger.info("Server ready")
 
 
@@ -231,6 +234,37 @@ def get_artifact(content_hash: str):
     if not artifact:
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
+
+
+# ── Retrieval ────────────────────────────────────────────────────────────────
+
+class RetrievalIndexRequest(BaseModel):
+    media_id: str = Field(min_length=1)
+    content_hash: str = Field(min_length=1)
+    trait_schema: str = Field(min_length=1)
+    prompt_version: str = Field(min_length=1)
+    retrieval: Dict[str, Any]
+
+
+@app.post("/retrieval/index", dependencies=[Depends(require_api_key)])
+def index_retrieval(request: RetrievalIndexRequest):
+    """Embed a validated retrieval contract and upsert its Atlas search documents."""
+    try:
+        count = index_retrieval_documents(
+            store=retrieval_store,
+            config=config,
+            media_id=request.media_id,
+            content_hash=request.content_hash,
+            trait_schema=request.trait_schema,
+            prompt_version=request.prompt_version,
+            retrieval=request.retrieval,
+        )
+        return {"ok": True, "documents_indexed": count}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception:
+        logger.exception("Retrieval indexing failed")
+        raise HTTPException(status_code=502, detail="Retrieval embedding or MongoDB indexing failed")
 
 
 # ── Runs ──────────────────────────────────────────────────────────────────────
