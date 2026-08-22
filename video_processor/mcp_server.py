@@ -280,8 +280,16 @@ else:
     logger.warning("MCP bearer auth: DISABLED (set INST_AI_BOT_API_KEY to require it)")
 
 
+OAUTH_PROTECTED_RESOURCE_METADATA_PATHS = frozenset({
+    "/.well-known/oauth-protected-resource",
+    "/.well-known/oauth-protected-resource/mcp",
+})
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
+        if request.url.path in OAUTH_PROTECTED_RESOURCE_METADATA_PATHS:
+            return await call_next(request)
         if not API_KEY:
             return await call_next(request)
         auth = request.headers.get("authorization", "")
