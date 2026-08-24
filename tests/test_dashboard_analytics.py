@@ -31,6 +31,19 @@ class DashboardAnalyticsClientTest(unittest.TestCase):
         audit = DashboardAnalyticsClient("https://dashboard.example", "read-secret", transport=transport).get_content_audit(14)
         self.assertEqual(audit["window"]["days"], 14)
 
+    def test_reads_current_creator_profile_with_dashboard_read_secret(self):
+        def transport(url, **kwargs):
+            self.assertEqual(url, "https://dashboard.example/api/internal/mcp/profile")
+            self.assertEqual(kwargs["headers"], {"X-MCP-Read-Secret": "read-secret"})
+            self.assertEqual(kwargs["params"], {"days": 60})
+            return SimpleNamespace(is_success=True, json=lambda: {"ok": True, "profile": {"window": {"days": 60}}})
+
+        profile = DashboardAnalyticsClient(
+            "https://dashboard.example", "read-secret", transport=transport
+        ).get_current_creator_profile(60)
+
+        self.assertEqual(profile, {"window": {"days": 60}})
+
     def test_surfaces_dashboard_errors(self):
         response = SimpleNamespace(is_success=False, status_code=404, json=lambda: {"ok": False, "error": "Reel not found."})
         with self.assertRaisesRegex(RuntimeError, "Reel not found"):

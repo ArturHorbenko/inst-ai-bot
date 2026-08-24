@@ -5,6 +5,7 @@ over Streamable HTTP:
   - index_video_from_url(url)
   - run_prompt(artifact_hash, prompt, model?, label?, metadata?)
   - get_artifact(content_hash)
+  - get_current_creator_profile(days?)
   - list_recent_reels(limit?)
   - get_reel_analytics(media_id, days?)
   - content_audit(days?)
@@ -44,10 +45,13 @@ mcp = FastMCP(
     "inst-ai-bot",
     instructions=(
         "Primitives for indexing and querying short-form videos (e.g. Instagram reels).\n\n"
+        "Every creator-specific workflow must start by calling get_current_creator_profile(days) "
+        "before retrieval, indexing, or run_prompt.\n\n"
         "Typical flow:\n"
-        "  1) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
-        "  2) search_videos(query) -> matching videos and timestamped moments\n"
-        "  3) get_video_context(content_hash, media_id?) -> evidence for an answer\n\n"
+        "  1) get_current_creator_profile(days) -> current creator context\n"
+        "  2) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
+        "  3) search_videos(query) -> matching videos and timestamped moments\n"
+        "  4) get_video_context(content_hash, media_id?) -> evidence for an answer\n\n"
         "Indexing is idempotent (content-hash addressed); re-calling index_video_from_url "
         "with the same URL is a cheap cache hit."
     ),
@@ -240,6 +244,17 @@ def get_video_context(
         "transcript": (artifact.get("transcript") or {}).get("segments") or [],
         "sources": artifact.get("sources") or [],
     }
+
+
+@mcp.tool()
+def get_current_creator_profile(days: int = 60) -> dict:
+    """Read the current evidence-first creator profile from the analytics dashboard.
+
+    This read-only tool returns the dashboard's bounded profile of the connected
+    creator. Call it first in every creator-specific workflow; the dashboard
+    authoritatively enforces its 30–60 day window.
+    """
+    return _dashboard_client().get_current_creator_profile(days)
 
 
 @mcp.tool()

@@ -40,3 +40,6 @@ class DashboardAnalyticsClient:
 
     def get_content_audit(self, days: int = 30) -> dict:
         return self._get("/api/internal/mcp/audit", {"days": days})["audit"]
+
+    def get_current_creator_profile(self, days: int = 60) -> dict:
+        return self._get("/api/internal/mcp/profile", {"days": days})["profile"]
