@@ -96,7 +96,7 @@ def index_images(
     existing = artifact_store.get_by_hash(content_hash)
     if existing:
         logger.info("Image artifact already exists for hash %s", content_hash)
-        if source_url:
+        if source_url or source_metadata:
             _append_source_if_new(
                 artifact_store, existing, source_url, platform, image_metadata,
                 source_fetcher or "provided_upload",

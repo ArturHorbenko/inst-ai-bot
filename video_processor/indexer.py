@@ -63,7 +63,7 @@ def index_video(
         existing = artifact_store.get_by_hash(content_hash)
         if existing:
             logger.info(f"Artifact already exists for hash {content_hash}")
-            if provenance_url:
+            if provenance_url or source_metadata:
                 _append_source_if_new(artifact_store, existing, provenance_url, platform, source_metadata, fetcher)
             if is_url:
                 url_cache.put(source, content_hash)
@@ -152,11 +152,15 @@ def _build_source(url, platform: str, metadata: dict, fetcher: Optional[str] = N
 def _append_source_if_new(
     artifact_store: ArtifactStore,
     artifact: dict,
-    url: str,
+    url: Optional[str],
     platform: str,
     metadata: dict,
     fetcher: Optional[str] = None,
 ):
-    existing_urls = {s.get("url") for s in artifact.get("sources", [])}
-    if url not in existing_urls:
+    identity = (url, platform, metadata or {})
+    already_linked = any(
+        (source.get("url"), source.get("type"), source.get("metadata") or {}) == identity
+        for source in artifact.get("sources", [])
+    )
+    if not already_linked:
         artifact_store.append_source(content_hash=artifact["content_hash"], source=_build_source(url, platform, metadata, fetcher))

@@ -99,6 +99,26 @@ def test_index_images_is_idempotent_and_keeps_image_provenance(tmp_path):
     }
 
 
+def test_duplicate_image_bytes_reuse_artifact_and_link_distinct_competitor_provenance(tmp_path):
+    image = tmp_path / "image.png"
+    make_image(image, "red")
+    store = MemoryArtifactStore()
+    config = SimpleNamespace(VIDEO_DIR=str(tmp_path / "artifacts"))
+
+    first = index_images(
+        [image], config, store, source_type="instagram_graph_api_competitor",
+        source_metadata={"competitor_id": "one", "instagram_media_id": "media-1"},
+    )
+    repeated = index_images(
+        [image], config, store, source_type="instagram_graph_api_competitor",
+        source_metadata={"competitor_id": "two", "instagram_media_id": "media-2"},
+    )
+
+    assert repeated["content_hash"] == first["content_hash"]
+    assert store.upsert_calls == 1
+    assert [source["metadata"]["competitor_id"] for source in repeated["sources"]] == ["one", "two"]
+
+
 def test_images_endpoint_accepts_multiple_authorized_uploads(tmp_path, monkeypatch):
     import server
 
