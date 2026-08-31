@@ -415,10 +415,21 @@ class SingleUserOAuthProvider:
         }
 
 
-def _security_headers() -> dict[str, str]:
+def _security_headers(form_redirect_uri: str | None = None) -> dict[str, str]:
+    form_action = "'self'"
+    if form_redirect_uri:
+        parsed = urlparse(form_redirect_uri)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            # Browsers apply form-action to the complete redirect chain. OAuth
+            # approval posts locally and then redirects to this exact registered
+            # client origin, so it must be present in the page CSP.
+            form_action += f" {parsed.scheme}://{parsed.netloc}"
     return {
         "Cache-Control": "no-store",
-        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+        "Content-Security-Policy": (
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            f"form-action {form_action}; frame-ancestors 'none'"
+        ),
         "Referrer-Policy": "no-referrer",
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
@@ -486,7 +497,7 @@ def build_app(
         client, params = pending
         return HTMLResponse(
             _login_page(client.client_name or "An MCP client", " ".join(params.scopes or []), request_id),
-            headers=_security_headers(),
+            headers=_security_headers(str(params.redirect_uri)),
         )
 
     async def login_post(request: Request):
@@ -519,7 +530,7 @@ def build_app(
                     "Incorrect password",
                 ),
                 status_code=401,
-                headers=_security_headers(),
+                headers=_security_headers(str(params.redirect_uri)),
             )
         limiter.succeeded(client_ip)
         target = provider.complete_authorization(request_id, approved=True)

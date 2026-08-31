@@ -128,6 +128,10 @@ async def _oauth_discovery_registration_and_pkce_flow():
         login_page = await client.get("/login", params={"request_id": request_id})
         assert login_page.status_code == 200
         assert "ChatGPT test" in login_page.text
+        assert (
+            "form-action 'self' https://client.example.com"
+            in login_page.headers["content-security-policy"]
+        )
 
         wrong_password = await client.post(
             "/login",

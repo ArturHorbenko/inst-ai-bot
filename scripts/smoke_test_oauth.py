@@ -58,6 +58,11 @@ def main() -> None:
     authorize_response.raise_for_status()
     login_url = authorize_response.headers["Location"]
     request_id = parse_qs(urlparse(login_url).query)["request_id"][0]
+    login_response = session.get(login_url, timeout=20)
+    login_response.raise_for_status()
+    callback_origin = "http://127.0.0.1"
+    if callback_origin not in login_response.headers.get("Content-Security-Policy", ""):
+        raise RuntimeError("Login CSP does not allow the registered OAuth callback origin")
 
     approval_response = session.post(
         f"{origin}/login",
