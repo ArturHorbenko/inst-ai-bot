@@ -1,0 +1,15 @@
+[Unit]
+Description=inst-ai-bot single-user OAuth authorization server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/artur/projects/inst-ai-bot
+ExecStart=/home/artur/projects/inst-ai-bot/venv/bin/python scripts/run_oauth.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

@@ -36,8 +36,10 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 │   ├── transcription.py      # Groq Whisper wrapper
 │   ├── downloader.py         # yt-dlp Instagram reel downloader
 │   └── mcp_server.py         # FastMCP server exposing primitives to Claude hosts
+│   └── oauth_server.py       # Single-user OAuth issuer for hosted MCP clients
 ├── scripts/
 │   └── run_mcp.py            # MCP entrypoint (uvicorn on :8002, path /mcp)
+│   └── run_oauth.py          # OAuth entrypoint (uvicorn on loopback :8003)
 ├── server.py                 # FastAPI server — 7 endpoints
 ├── CONTEXT.md                # Domain glossary
 └── docs/adr/                 # Architecture decision records
@@ -48,7 +50,7 @@ See `CONTEXT.md` for domain glossary (Artifact, Run, Source, Content hash). See 
 Two parallel surfaces over the same MongoDB-backed core:
 
 - **FastAPI HTTP** (`server.py`, port 8001) — the 7 endpoints below; gated by `X-API-Key`. Used by the Next.js log viewer and any direct callers.
-- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — three tools: `index_video_from_url`, `run_prompt`, `get_artifact`. Streamable HTTP transport, gated by `Authorization: Bearer <key>` (same `INST_AI_BOT_API_KEY`). This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
+- **MCP server** (`video_processor/mcp_server.py`, port 8002, path `/mcp`) — nine video, retrieval, creator-profile, and analytics tools. Streamable HTTP transport with configurable bearer or OAuth auth. This is what the markdown-only skills (`skills/{adapt-reel,grill-reel}/`) call.
 
 Both wrap the same `index_video` / `run_prompt` functions and write to the same `artifacts` and `runs` collections — runs created via MCP show up in `GET /runs`.
 
@@ -146,8 +148,20 @@ Environment variables via `.env`:
 | `OPENAI_API_KEY` | — | OpenAI key (reserved for future provider) |
 | `TWELVE_LABS_API_KEY` | — | TwelveLabs key (reserved for future provider) |
 | `SUPPORTED_VIDEO_FORMATS` | `mp4,mov,avi,mkv,webm,m4v` | Accepted upload formats |
-| `INST_AI_BOT_API_KEY` | — | If set, every endpoint except `/health` requires header `X-API-Key: <value>` (401 otherwise). Unset = auth disabled. |
+| `INST_AI_BOT_API_KEY` | — | FastAPI `X-API-Key` value and MCP static bearer. Required when `MCP_AUTH_MODE=bearer`. |
 | `INST_AI_BOT_RATE_LIMIT_PER_MIN` | `120` | Per-IP sliding-window rate limit (in-memory, per worker). Behind a proxy uses `X-Forwarded-For` for the real IP. Set to `0` to disable. |
+| `MCP_AUTH_MODE` | `bearer` | MCP auth mode: `bearer`, `oauth`, `oauth-and-bearer`, or local-only `disabled-dev`. |
+| `MCP_RESOURCE_URL` | — | Canonical public MCP resource URL, required for OAuth. |
+| `MCP_OAUTH_ISSUER_URL` | — | OAuth authorization-server issuer, required for OAuth. |
+| `MCP_OAUTH_JWKS_URL` | — | OAuth signing-key set, required for OAuth JWT verification. |
+| `MCP_OAUTH_AUDIENCE` | resource URL | Expected access-token audience. |
+| `MCP_OAUTH_SCOPE` | `instagram-creator:use` | Scope required for the single configured creator. |
+| `MCP_OAUTH_ALGORITHMS` | `RS256` | Comma-separated JWT algorithms accepted from the configured issuer. |
+| `OAUTH_ADMIN_PASSWORD_HASH` | — | Scrypt hash for the single OAuth owner. Generate with `scripts/setup_oauth_secrets.py`. |
+| `OAUTH_SIGNING_KEY_PATH` | `secrets/oauth-signing-key.pem` | RSA private signing key, mode `0600`, never committed. |
+| `OAUTH_SIGNING_KEY_ID` | `inst-ai-bot-oauth-1` | `kid` published in JWKS and access-token headers. |
+| `OAUTH_ACCESS_TOKEN_TTL` | `900` | Access-token lifetime in seconds. |
+| `OAUTH_REFRESH_TOKEN_TTL` | `2592000` | Refresh-token lifetime in seconds. |
 
 ## Architecture Notes
 

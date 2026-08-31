@@ -10,9 +10,8 @@ over Streamable HTTP:
   - get_reel_analytics(media_id, days?)
   - content_audit(days?)
 
-Auth: Bearer token in `Authorization: Bearer <key>`; must match
-`INST_AI_BOT_API_KEY`. If the env var is unset, auth is disabled (matches
-server.py's behaviour for parity).
+Auth: configurable bearer or OAuth 2.1 resource-server validation. Every
+authorized client operates on the same creator configured by the server.
 
 Mirrors the FastAPI routes in server.py but is callable by MCP clients
 (Claude Code, Claude Desktop) without bundling secrets into a skill.
@@ -23,13 +22,15 @@ import secrets
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import get_config
 from .dashboard_analytics import DashboardAnalyticsClient
 from .indexer import index_video
+from .mcp_auth import build_oauth_runtime
 from .retrieval import (
     RetrievalStore,
     resolve_retrieval_contract,
@@ -40,13 +41,64 @@ from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
 
 logger = logging.getLogger(__name__)
 
+READ_ONLY_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+)
+INDEX_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
+RUN_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=True,
+)
+
+_config = get_config()
+API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()
+AUTH_MODE = _config.MCP_AUTH_MODE
+TOOL_SECURITY_META = (
+    {
+        "securitySchemes": [
+            {"type": "oauth2", "scopes": [_config.MCP_OAUTH_SCOPE]},
+        ]
+    }
+    if AUTH_MODE in {"oauth", "oauth-and-bearer"}
+    else None
+)
+_oauth_runtime = None
+_oauth_config_error = None
+if AUTH_MODE in {"oauth", "oauth-and-bearer"}:
+    try:
+        _oauth_runtime = build_oauth_runtime(
+            issuer_url=_config.MCP_OAUTH_ISSUER_URL,
+            resource_url=_config.MCP_RESOURCE_URL,
+            jwks_url=_config.MCP_OAUTH_JWKS_URL,
+            audience=_config.MCP_OAUTH_AUDIENCE,
+            required_scope=_config.MCP_OAUTH_SCOPE,
+            algorithms=tuple(
+                algorithm.strip()
+                for algorithm in _config.MCP_OAUTH_ALGORITHMS.split(",")
+                if algorithm.strip()
+            ),
+            legacy_bearer_token=API_KEY if AUTH_MODE == "oauth-and-bearer" else None,
+        )
+    except ValueError as exc:
+        _oauth_config_error = str(exc)
+
 
 mcp = FastMCP(
     "inst-ai-bot",
     instructions=(
-        "Primitives for indexing and querying short-form videos (e.g. Instagram reels).\n\n"
-        "Every creator-specific workflow must start by calling get_current_creator_profile(days) "
-        "before retrieval, indexing, or run_prompt.\n\n"
+        "Every creator-specific workflow operates on the one creator configured by the server "
+        "and must start by calling get_current_creator_profile(days) before retrieval, indexing, "
+        "or run_prompt.\n\n"
         "Typical flow:\n"
         "  1) get_current_creator_profile(days) -> current creator context\n"
         "  2) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
@@ -58,10 +110,11 @@ mcp = FastMCP(
     host="0.0.0.0",
     port=8002,
     stateless_http=True,
+    auth=_oauth_runtime.settings if _oauth_runtime else None,
+    token_verifier=_oauth_runtime.verifier if _oauth_runtime else None,
 )
 
 
-_config = get_config()
 _db = DatabaseConnection(_config)
 _artifact_store: Optional[ArtifactStore] = None
 _runs_store: Optional[RunsStore] = None
@@ -113,7 +166,11 @@ def _trim_artifact(artifact: dict) -> dict:
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Index Instagram video",
+    annotations=INDEX_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def index_video_from_url(url: str) -> dict:
     """Download, hash, and transcribe a short-form video. Idempotent by content hash.
 
@@ -128,7 +185,7 @@ def index_video_from_url(url: str) -> dict:
     return _trim_artifact(artifact)
 
 
-@mcp.tool()
+@mcp.tool(title="Run video prompt", annotations=RUN_ANNOTATIONS, meta=TOOL_SECURITY_META)
 def run_prompt(
     artifact_hash: str,
     prompt: str,
@@ -161,7 +218,11 @@ def run_prompt(
     return {"run_id": run["run_id"], "output": run["output"]}
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Get indexed artifact",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def get_artifact(content_hash: str) -> dict:
     """Fetch a previously indexed artifact by `content_hash`. Returns the trimmed
     artifact (same shape as `index_video_from_url`). Useful when you already have a
@@ -173,7 +234,11 @@ def get_artifact(content_hash: str) -> dict:
     return _trim_artifact(artifact)
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Search indexed videos",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def search_videos(
     query: str,
     limit: int = 8,
@@ -210,7 +275,11 @@ def search_videos(
         ) from exc
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Get video context",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def get_video_context(
     content_hash: str,
     media_id: Optional[str] = None,
@@ -246,7 +315,11 @@ def get_video_context(
     }
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Get creator profile",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def get_current_creator_profile(days: int = 60) -> dict:
     """Read the current evidence-first creator profile from the analytics dashboard.
 
@@ -257,7 +330,11 @@ def get_current_creator_profile(days: int = 60) -> dict:
     return _dashboard_client().get_current_creator_profile(days)
 
 
-@mcp.tool()
+@mcp.tool(
+    title="List recent Reels",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def list_recent_reels(limit: int = 10) -> list[dict]:
     """Read up to 25 recent Reels from the dashboard's stored analytics data.
 
@@ -268,7 +345,11 @@ def list_recent_reels(limit: int = 10) -> list[dict]:
     return _dashboard_client().list_recent_reels(limit)
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Get Reel analytics",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def get_reel_analytics(media_id: str, days: int = 30) -> dict:
     """Read one Reel's stored observation history and newest validated traits.
 
@@ -279,7 +360,11 @@ def get_reel_analytics(media_id: str, days: int = 30) -> dict:
     return _dashboard_client().get_reel_analytics(media_id, days)
 
 
-@mcp.tool()
+@mcp.tool(
+    title="Audit creator content",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+)
 def content_audit(days: int = 30) -> dict:
     """Summarize the last N days of stored Reel performance (1–365 days).
 
@@ -288,11 +373,16 @@ def content_audit(days: int = 30) -> dict:
     only; it never calls Meta or starts a model Run.
     """
     return _dashboard_client().get_content_audit(days)
-API_KEY = os.environ.get("INST_AI_BOT_API_KEY", "").strip()
-if API_KEY:
+
+
+if AUTH_MODE == "bearer" and API_KEY:
     logger.info("MCP bearer auth: ENABLED")
-else:
-    logger.warning("MCP bearer auth: DISABLED (set INST_AI_BOT_API_KEY to require it)")
+elif AUTH_MODE == "oauth-and-bearer" and API_KEY:
+    logger.info("MCP OAuth and legacy bearer auth: ENABLED")
+elif AUTH_MODE in {"bearer", "oauth-and-bearer"}:
+    logger.warning("MCP bearer key is not configured")
+elif AUTH_MODE == "oauth":
+    logger.info("MCP OAuth auth: ENABLED")
 
 
 OAUTH_PROTECTED_RESOURCE_METADATA_PATHS = frozenset({
@@ -301,23 +391,71 @@ OAUTH_PROTECTED_RESOURCE_METADATA_PATHS = frozenset({
 })
 
 
-class BearerAuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        if request.url.path in OAUTH_PROTECTED_RESOURCE_METADATA_PATHS:
-            return await call_next(request)
+class BearerAuthMiddleware:
+    """Streaming-safe ASGI bearer authentication for the MCP application."""
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if scope.get("path") in OAUTH_PROTECTED_RESOURCE_METADATA_PATHS:
+            await self.app(scope, receive, send)
+            return
         if not API_KEY:
-            return await call_next(request)
-        auth = request.headers.get("authorization", "")
+            await self.app(scope, receive, send)
+            return
+        headers = {
+            key.decode("latin-1").lower(): value.decode("latin-1")
+            for key, value in scope.get("headers", [])
+        }
+        auth = headers.get("authorization", "")
         if not auth.lower().startswith("bearer "):
-            return JSONResponse({"error": "missing bearer token"}, status_code=401)
+            await JSONResponse({"error": "missing bearer token"}, status_code=401)(scope, receive, send)
+            return
         token = auth.split(" ", 1)[1].strip()
         if not secrets.compare_digest(token, API_KEY):
-            return JSONResponse({"error": "invalid bearer token"}, status_code=401)
-        return await call_next(request)
+            await JSONResponse({"error": "invalid bearer token"}, status_code=401)(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def build_app() -> Starlette:
-    """Return the Starlette ASGI app for the MCP server with bearer auth applied."""
+    """Return the MCP ASGI app with the configured authentication mode."""
     app = mcp.streamable_http_app()
+    if AUTH_MODE == "disabled-dev":
+        logger.warning("MCP authentication: DISABLED FOR DEVELOPMENT")
+        return app
+    if AUTH_MODE in {"oauth", "oauth-and-bearer"}:
+        if _oauth_runtime is None:
+            raise RuntimeError(_oauth_config_error or "MCP OAuth is not configured")
+        from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
+        from mcp.server.auth.routes import cors_middleware
+        from mcp.shared.auth import ProtectedResourceMetadata
+        from starlette.routing import Route
+
+        metadata = ProtectedResourceMetadata(
+            resource=_config.MCP_RESOURCE_URL,
+            authorization_servers=[_config.MCP_OAUTH_ISSUER_URL],
+            scopes_supported=[_config.MCP_OAUTH_SCOPE],
+        )
+        app.routes.insert(
+            0,
+            Route(
+                "/.well-known/oauth-protected-resource",
+                endpoint=cors_middleware(
+                    ProtectedResourceMetadataHandler(metadata).handle,
+                    ["GET", "OPTIONS"],
+                ),
+                methods=["GET", "OPTIONS"],
+            ),
+        )
+        return app
+    if AUTH_MODE != "bearer":
+        raise RuntimeError(f"Unsupported MCP_AUTH_MODE: {AUTH_MODE}")
+    if not API_KEY:
+        raise RuntimeError("INST_AI_BOT_API_KEY is required when MCP_AUTH_MODE=bearer")
     app.add_middleware(BearerAuthMiddleware)
     return app

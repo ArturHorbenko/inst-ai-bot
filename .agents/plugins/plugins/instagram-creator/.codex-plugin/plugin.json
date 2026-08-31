@@ -1,0 +1,22 @@
+{
+  "name": "instagram-creator",
+  "version": "0.1.0",
+  "description": "Single-creator Instagram analytics and Reel workflow skills",
+  "author": {
+    "name": "inst-ai-bot"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Instagram Creator",
+    "shortDescription": "Analyze one creator's Instagram data and Reels.",
+    "longDescription": "Private workflows layered on the inst-ai-bot MCP server for one configured Instagram creator.",
+    "developerName": "inst-ai-bot",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "Summarize my creator profile from the last 60 days.",
+      "Adapt this Instagram Reel for my creator profile.",
+      "Grill this Instagram Reel and tell me what to improve."
+    ]
+  }
+}

@@ -5,27 +5,29 @@ description: Grill an Instagram reel — index it via the inst-ai-bot MCP server
 
 # grill-reel
 
-Run an opinionated creator-feedback pass on an Instagram reel by calling the `inst-ai-bot` MCP server.
+Run an opinionated creator-feedback pass on an Instagram reel by calling the `inst-ai-bot` MCP server. The server exposes the one creator configured by the server.
 
 ## Quick start
 
 1. Confirm the user supplied an Instagram reel URL (`instagram.com/reel/...` or `/p/...`). If not, ask for one.
 
-2. Call MCP tool **`inst-ai-bot.index_video_from_url`** with `{"url": "<reel-url>"}`. It returns `{content_hash, transcript_text, caption, hashtags, uploader, comments, ...}`. Idempotent — fast on a re-grill.
+2. Call MCP tool **`inst-ai-bot.get_current_creator_profile`** with `{"days": 60}`. Keep the returned profile as the current evidence-based creator context.
 
-3. Format `comments` as a numbered list (see "Comment formatting" below) and `hashtags` as a comma-joined string. Fill the template in "Prompt template" with the returned fields.
+3. Call MCP tool **`inst-ai-bot.index_video_from_url`** with `{"url": "<reel-url>"}`. It returns `{content_hash, transcript_text, caption, hashtags, uploader, comments, ...}`. Idempotent — fast on a re-grill.
 
-4. Call MCP tool **`inst-ai-bot.run_prompt`** with:
-   - `artifact_hash`: the `content_hash` from step 2
-   - `prompt`: the filled template from step 3
+4. Format `comments` as a numbered list (see "Comment formatting" below) and `hashtags` as a comma-joined string. Serialize the creator profile as readable JSON. Fill the template in "Prompt template" with the profile and indexed Reel fields.
+
+5. Call MCP tool **`inst-ai-bot.run_prompt`** with:
+   - `artifact_hash`: the `content_hash` from step 3
+   - `prompt`: the filled template from step 4
    - `model`: `"google/gemini-2.5-pro"`
    - `label`: `"grill"`
 
-5. Show the `output` field from the response to the user as the grill output. Don't paraphrase. Surface any error from the MCP tool call directly.
+6. Show the `output` field from the response to the user as the grill output. Don't paraphrase. Surface any error from the MCP tool call directly.
 
 ## Assumptions
 
-- The `inst-ai-bot` MCP server is configured in this Claude host (see `skills/README.md` for per-host setup). If the MCP tools aren't available, tell the user — do **not** try to start a server or fall back to anything else.
+- The `inst-ai-bot` MCP server is configured in the current client (see `skills/README.md` for per-client setup). If the MCP tools aren't available, tell the user — do **not** try to start a server or fall back to anything else.
 - `GEMINI_API_KEY` and `GROQ_API_KEY` live in the server's `.env`. Skill-side has no secrets.
 
 ## Customizing
@@ -52,6 +54,9 @@ Use this prompt verbatim, replacing `{placeholders}` with the values from step 2
 
 ```
 You are reviewing an Instagram reel as a senior short-form video creator. Your job is to tell this creator, directly and specifically, what they could do better next time.
+
+CURRENT EVIDENCE-BASED CREATOR PROFILE
+{creator_profile}
 
 CONTEXT FROM THE POST
 Caption: {caption}

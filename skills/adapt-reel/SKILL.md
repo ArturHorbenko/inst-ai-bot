@@ -5,27 +5,29 @@ description: Take an Instagram reel and propose how to adapt its format/structur
 
 # adapt-reel
 
-Run a niche-adaptation pass on an Instagram reel by calling the `inst-ai-bot` MCP server. The output is a remix plan, not a critique.
+Run a niche-adaptation pass on an Instagram reel by calling the `inst-ai-bot` MCP server. The server exposes the one creator configured by the server; the output is a remix plan for that creator, not a critique.
 
 ## Quick start
 
 1. Confirm the user supplied an Instagram reel URL (`instagram.com/reel/...` or `/p/...`). If not, ask for one.
 
-2. Call MCP tool **`inst-ai-bot.index_video_from_url`** with `{"url": "<reel-url>"}`. It returns `{content_hash, transcript_text, caption, hashtags, uploader, comments, ...}`. The call is idempotent — re-running on the same URL is a cheap cache hit.
+2. Call MCP tool **`inst-ai-bot.get_current_creator_profile`** with `{"days": 60}`. Keep the returned profile as the current evidence-based creator context.
 
-3. Format `comments` as a numbered list (see "Comment formatting" below) and `hashtags` as a comma-joined string. Build the prompt by filling the template in "Prompt template" with the returned fields.
+3. Call MCP tool **`inst-ai-bot.index_video_from_url`** with `{"url": "<reel-url>"}`. It returns `{content_hash, transcript_text, caption, hashtags, uploader, comments, ...}`. The call is idempotent — re-running on the same URL is a cheap cache hit.
 
-4. Call MCP tool **`inst-ai-bot.run_prompt`** with:
-   - `artifact_hash`: the `content_hash` from step 2
-   - `prompt`: the filled template from step 3
+4. Format `comments` as a numbered list (see "Comment formatting" below) and `hashtags` as a comma-joined string. Serialize the creator profile as readable JSON. Build the prompt by filling the template in "Prompt template" with the profile and indexed Reel fields.
+
+5. Call MCP tool **`inst-ai-bot.run_prompt`** with:
+   - `artifact_hash`: the `content_hash` from step 3
+   - `prompt`: the filled template from step 4
    - `model`: `"google/gemini-2.5-pro"`
    - `label`: `"adapt"`
 
-5. Show the `output` field from the response to the user as the adaptation plan. Don't paraphrase. Surface any error from the MCP tool call directly.
+6. Show the `output` field from the response to the user as the adaptation plan. Don't paraphrase. Surface any error from the MCP tool call directly.
 
 ## Assumptions
 
-- The `inst-ai-bot` MCP server is configured in this Claude host (see `skills/README.md` for per-host setup). If the MCP tools aren't available, tell the user — do **not** try to start a server or fall back to anything else.
+- The `inst-ai-bot` MCP server is configured in the current client (see `skills/README.md` for per-client setup). If the MCP tools aren't available, tell the user — do **not** try to start a server or fall back to anything else.
 - `GEMINI_API_KEY` and `GROQ_API_KEY` live in the server's `.env`. Skill-side has no secrets.
 
 ## Customizing
@@ -52,6 +54,9 @@ Use this prompt verbatim, replacing `{placeholders}` with the values from step 2
 
 ```
 You are a short-form video strategist helping a creator adapt other people's reels into their own niche.
+
+CURRENT EVIDENCE-BASED CREATOR PROFILE
+{creator_profile}
 
 THE CREATOR'S NICHE
 Tech lifestyle humor, relatable. Audience: developers, founders, AI/SaaS people, tech-curious.
