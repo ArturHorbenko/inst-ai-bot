@@ -191,7 +191,7 @@ Expected: `registration=ok authorization=ok token=ok mcp_initialize=ok revocatio
 Run these in every connected client:
 
 1. “Summarize my creator profile from the last 60 days.”
-2. “List my five most recent Reels.”
+2. “List my five most recent Reels and Feed posts.”
 3. “Show analytics for this media ID.”
 4. “Find indexed videos where I use a problem-solution hook.”
 5. “Index this Instagram Reel and analyze its hook.”

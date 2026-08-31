@@ -6,8 +6,8 @@ over Streamable HTTP:
   - run_prompt(artifact_hash, prompt, model?, label?, metadata?)
   - get_artifact(content_hash)
   - get_current_creator_profile(days?)
-  - list_recent_reels(limit?)
-  - get_reel_analytics(media_id, days?)
+  - list_recent_content(limit?)
+  - get_content_analytics(media_id, days?)
   - content_audit(days?)
 
 Auth: configurable bearer or OAuth 2.1 resource-server validation. Every
@@ -331,33 +331,34 @@ def get_current_creator_profile(days: int = 60) -> dict:
 
 
 @mcp.tool(
-    title="List recent Reels",
+    title="List recent content",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
 )
-def list_recent_reels(limit: int = 10) -> list[dict]:
-    """Read up to 25 recent Reels from the dashboard's stored analytics data.
+def list_recent_content(limit: int = 10) -> list[dict]:
+    """Read up to 25 recent Reels and Feed posts from stored analytics data.
 
     Results include the latest Meta observation, calculated day-over-day view
     growth when two snapshots exist, and the newest validated trait extraction.
-    This tool is read-only: it never calls Meta or starts a model Run.
+    Trial Reels are excluded; other Reels and Feed posts are included. This tool
+    is read-only: it never calls Meta or starts a model Run.
     """
-    return _dashboard_client().list_recent_reels(limit)
+    return _dashboard_client().list_recent_content(limit)
 
 
 @mcp.tool(
-    title="Get Reel analytics",
+    title="Get content analytics",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
 )
-def get_reel_analytics(media_id: str, days: int = 30) -> dict:
-    """Read one Reel's stored observation history and newest validated traits.
+def get_content_analytics(media_id: str, days: int = 30) -> dict:
+    """Read one Reel or Feed post's history and newest validated traits.
 
-    `media_id` is Meta's media ID, returned by `list_recent_reels`. `days` is
+    `media_id` is Meta's media ID, returned by `list_recent_content`. `days` is
     bounded to 1–90 by the dashboard. This is a database read, not a fresh Meta
     request or a video/model operation.
     """
-    return _dashboard_client().get_reel_analytics(media_id, days)
+    return _dashboard_client().get_content_analytics(media_id, days)
 
 
 @mcp.tool(
@@ -366,11 +367,12 @@ def get_reel_analytics(media_id: str, days: int = 30) -> dict:
     meta=TOOL_SECURITY_META,
 )
 def content_audit(days: int = 30) -> dict:
-    """Summarize the last N days of stored Reel performance (1–365 days).
+    """Summarize the last N days of stored Reel and Feed post performance.
 
     Returns data coverage, personal medians, leaders by views/share/save rate,
-    and available format comparisons. It reads stored dashboard observations
-    only; it never calls Meta or starts a model Run.
+    and available format comparisons for 1–365 days. Trial Reels are excluded;
+    other Reels and Feed posts are included. It reads stored dashboard
+    observations only; it never calls Meta or starts a model Run.
     """
     return _dashboard_client().get_content_audit(days)
 

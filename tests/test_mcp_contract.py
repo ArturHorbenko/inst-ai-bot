@@ -28,8 +28,8 @@ EXPECTED_TOOL_PARAMETERS = {
     "search_videos": {"query", "limit", "trait_schema", "prompt_version"},
     "get_video_context": {"content_hash", "media_id", "trait_schema", "prompt_version"},
     "get_current_creator_profile": {"days"},
-    "list_recent_reels": {"limit"},
-    "get_reel_analytics": {"media_id", "days"},
+    "list_recent_content": {"limit"},
+    "get_content_analytics": {"media_id", "days"},
     "content_audit": {"days"},
 }
 
@@ -38,8 +38,8 @@ READ_ONLY_TOOLS = {
     "search_videos",
     "get_video_context",
     "get_current_creator_profile",
-    "list_recent_reels",
-    "get_reel_analytics",
+    "list_recent_content",
+    "get_content_analytics",
     "content_audit",
 }
 

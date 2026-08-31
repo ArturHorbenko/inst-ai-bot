@@ -32,14 +32,17 @@ class DashboardAnalyticsClient:
             raise RuntimeError(payload.get("error") or f"Dashboard analytics HTTP {response.status_code}")
         return payload
 
-    def list_recent_reels(self, limit: int = 10) -> list[dict]:
-        return self._get("/api/internal/mcp/reels", {"limit": limit})["reels"]
+    def list_recent_content(self, limit: int = 10) -> list[dict]:
+        return self._get("/api/internal/mcp/content", {"limit": limit})["content"]
 
-    def get_reel_analytics(self, media_id: str, days: int = 30) -> dict:
-        return self._get("/api/internal/mcp/reels", {"mediaId": media_id, "days": days})["reel"]
+    def get_content_analytics(self, media_id: str, days: int = 30) -> dict:
+        return self._get("/api/internal/mcp/content", {"mediaId": media_id, "days": days})["content"]
 
     def get_content_audit(self, days: int = 30) -> dict:
-        return self._get("/api/internal/mcp/audit", {"days": days})["audit"]
+        return self._get(
+            "/api/internal/mcp/audit",
+            {"days": days, "includeArchived": "true"},
+        )["audit"]
 
     def get_current_creator_profile(self, days: int = 60) -> dict:
         return self._get("/api/internal/mcp/profile", {"days": days})["profile"]
