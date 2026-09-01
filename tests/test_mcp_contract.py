@@ -72,3 +72,22 @@ def test_tools_advertise_titles_and_safety_annotations():
     assert tools_by_name["index_video_from_url"].annotations.openWorldHint is True
     assert tools_by_name["run_prompt"].annotations.idempotentHint is False
     assert tools_by_name["run_prompt"].annotations.openWorldHint is True
+
+
+def test_tools_advertise_structured_output_schemas():
+    tools = asyncio.run(mcp_server.mcp.list_tools())
+    tools_by_name = {tool.name: tool for tool in tools}
+
+    for tool in tools:
+        assert tool.outputSchema is not None, f"{tool.name} is missing outputSchema"
+        assert tool.outputSchema["type"] == "object"
+
+    assert "content_hash" in tools_by_name["index_video_from_url"].outputSchema["properties"]
+    assert "run_id" in tools_by_name["run_prompt"].outputSchema["properties"]
+    assert "window" in tools_by_name["get_current_creator_profile"].outputSchema["properties"]
+    assert "media" in tools_by_name["get_content_analytics"].outputSchema["properties"]
+    assert "coverage" in tools_by_name["content_audit"].outputSchema["properties"]
+
+    # List return values are wrapped by FastMCP so structuredContent stays an object.
+    assert "result" in tools_by_name["search_videos"].outputSchema["properties"]
+    assert "result" in tools_by_name["list_recent_content"].outputSchema["properties"]

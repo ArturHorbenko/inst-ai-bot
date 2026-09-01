@@ -19,10 +19,11 @@ Mirrors the FastAPI routes in server.py but is callable by MCP clients
 import logging
 import os
 import secrets
-from typing import Optional
+from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import BaseModel, ConfigDict
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -40,6 +41,85 @@ from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
 from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
 
 logger = logging.getLogger(__name__)
+
+
+class ToolOutput(BaseModel):
+    """Base for MCP outputs whose nested dashboard fields can evolve independently."""
+
+    model_config = ConfigDict(extra="allow")
+
+
+class ArtifactOutput(ToolOutput):
+    content_hash: str
+    duration_sec: Optional[float] = None
+    transcript_text: Optional[str] = None
+    caption: Optional[str] = None
+    hashtags: list[str]
+    uploader: Optional[str] = None
+    comments: list[Any]
+    indexed_at: Any = None
+
+
+class RunPromptOutput(ToolOutput):
+    run_id: str
+    output: str
+
+
+class RetrievalDocumentOutput(ToolOutput):
+    media_id: str
+    content_hash: str
+    trait_schema: str
+    prompt_version: str
+    chunk_id: str
+    kind: str
+    start_sec: Optional[float] = None
+    end_sec: Optional[float] = None
+    text: str
+    retrieval_tags: list[str]
+    score: Optional[float] = None
+
+
+class VideoContextOutput(ToolOutput):
+    content_hash: str
+    media_id: Optional[str] = None
+    retrieval_documents: list[RetrievalDocumentOutput]
+    transcript: list[dict[str, Any]]
+    sources: list[dict[str, Any]]
+
+
+class CreatorProfileOutput(ToolOutput):
+    window: dict[str, Any]
+    coverage: dict[str, Any]
+    pillars: dict[str, Any]
+    contentTypes: dict[str, Any]
+    voice: dict[str, Any]
+    audience: dict[str, Any]
+    brands: dict[str, Any]
+
+
+class ContentAnalyticsOutput(ToolOutput):
+    media: dict[str, Any]
+    latestObservation: Optional[dict[str, Any]] = None
+    observations: list[dict[str, Any]]
+    snapshotMetricChanges: list[dict[str, Any]]
+    snapshotRateSeries: list[dict[str, Any]]
+    taxonomy: Optional[dict[str, Any]] = None
+    manualTaxonomy: Optional[dict[str, Any]] = None
+    taxonomyTrait: Optional[dict[str, Any]] = None
+    retrievalTrait: Optional[dict[str, Any]] = None
+    commentResponse: Optional[dict[str, Any]] = None
+    trait: Optional[dict[str, Any]] = None
+
+
+class ContentAuditOutput(ToolOutput):
+    window: dict[str, Any]
+    coverage: dict[str, Any]
+    medians: dict[str, Any]
+    leaders: dict[str, Any]
+    taxonomy: dict[str, Any]
+    byFormat: list[dict[str, Any]]
+    content: list[dict[str, Any]]
+    reels: list[dict[str, Any]]
 
 READ_ONLY_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=True,
@@ -170,8 +250,9 @@ def _trim_artifact(artifact: dict) -> dict:
     title="Index Instagram video",
     annotations=INDEX_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def index_video_from_url(url: str) -> dict:
+def index_video_from_url(url: str) -> ArtifactOutput:
     """Download, hash, and transcribe a short-form video. Idempotent by content hash.
 
     Pass an Instagram reel URL (e.g. `https://www.instagram.com/reel/...` or `/p/...`).
@@ -185,14 +266,19 @@ def index_video_from_url(url: str) -> dict:
     return _trim_artifact(artifact)
 
 
-@mcp.tool(title="Run video prompt", annotations=RUN_ANNOTATIONS, meta=TOOL_SECURITY_META)
+@mcp.tool(
+    title="Run video prompt",
+    annotations=RUN_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+    structured_output=True,
+)
 def run_prompt(
     artifact_hash: str,
     prompt: str,
     model: str = "google/gemini-2.5-pro",
     label: Optional[str] = None,
     metadata: Optional[dict] = None,
-) -> dict:
+) -> RunPromptOutput:
     """Run an opaque multimodal prompt against an indexed artifact.
 
     `artifact_hash` must be a `content_hash` returned by `index_video_from_url`.
@@ -222,8 +308,9 @@ def run_prompt(
     title="Get indexed artifact",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def get_artifact(content_hash: str) -> dict:
+def get_artifact(content_hash: str) -> ArtifactOutput:
     """Fetch a previously indexed artifact by `content_hash`. Returns the trimmed
     artifact (same shape as `index_video_from_url`). Useful when you already have a
     hash and want to re-read its transcript / metadata without re-indexing."""
@@ -238,13 +325,14 @@ def get_artifact(content_hash: str) -> dict:
     title="Search indexed videos",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
 def search_videos(
     query: str,
     limit: int = 8,
     trait_schema: Optional[str] = None,
     prompt_version: Optional[str] = None,
-) -> list[dict]:
+) -> list[RetrievalDocumentOutput]:
     """Semantic-search indexed videos and timestamped moments with Atlas Vector Search.
 
     Use this first for questions such as "find a Reel about fence installation" or
@@ -279,13 +367,14 @@ def search_videos(
     title="Get video context",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
 def get_video_context(
     content_hash: str,
     media_id: Optional[str] = None,
     trait_schema: Optional[str] = None,
     prompt_version: Optional[str] = None,
-) -> dict:
+) -> VideoContextOutput:
     """Get the stored retrieval chunks and source transcript for one indexed video.
 
     Call this after `search_videos` with its `content_hash` (and `media_id` when
@@ -319,8 +408,9 @@ def get_video_context(
     title="Get creator profile",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def get_current_creator_profile(days: int = 60) -> dict:
+def get_current_creator_profile(days: int = 60) -> CreatorProfileOutput:
     """Read the current evidence-first creator profile from the analytics dashboard.
 
     This read-only tool returns the dashboard's bounded profile of the connected
@@ -334,8 +424,9 @@ def get_current_creator_profile(days: int = 60) -> dict:
     title="List recent content",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def list_recent_content(limit: int = 10) -> list[dict]:
+def list_recent_content(limit: int = 10) -> list[ContentAnalyticsOutput]:
     """Read up to 25 recent Reels and Feed posts from stored analytics data.
 
     Results include the latest Meta observation, calculated day-over-day view
@@ -350,8 +441,9 @@ def list_recent_content(limit: int = 10) -> list[dict]:
     title="Get content analytics",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def get_content_analytics(media_id: str, days: int = 30) -> dict:
+def get_content_analytics(media_id: str, days: int = 30) -> ContentAnalyticsOutput:
     """Read one Reel or Feed post's history and newest validated traits.
 
     `media_id` is Meta's media ID, returned by `list_recent_content`. `days` is
@@ -365,8 +457,9 @@ def get_content_analytics(media_id: str, days: int = 30) -> dict:
     title="Audit creator content",
     annotations=READ_ONLY_ANNOTATIONS,
     meta=TOOL_SECURITY_META,
+    structured_output=True,
 )
-def content_audit(days: int = 30) -> dict:
+def content_audit(days: int = 30) -> ContentAuditOutput:
     """Summarize the last N days of stored Reel and Feed post performance.
 
     Returns data coverage, personal medians, leaders by views/share/save rate,
