@@ -2,6 +2,7 @@
 
 Exposes read/write Artifact primitives plus read-only dashboard analytics tools
 over Streamable HTTP:
+  - get_workflow(name)
   - index_video_from_url(url)
   - run_prompt(artifact_hash, prompt, model?, label?, metadata?)
   - get_artifact(content_hash)
@@ -39,6 +40,7 @@ from .retrieval import (
 )
 from .runner import ArtifactNotFound, run_prompt as run_prompt_impl
 from .store import ArtifactStore, DatabaseConnection, RunsStore, UrlCacheStore
+from .workflow_guides import WorkflowName, WorkflowOutput, load_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -176,16 +178,16 @@ if AUTH_MODE in {"oauth", "oauth-and-bearer"}:
 mcp = FastMCP(
     "inst-ai-bot",
     instructions=(
-        "Every creator-specific workflow operates on the one creator configured by the server "
-        "and must start by calling get_current_creator_profile(days) before retrieval, indexing, "
-        "or run_prompt.\n\n"
-        "Typical flow:\n"
-        "  1) get_current_creator_profile(days) -> current creator context\n"
-        "  2) index_video_from_url(url) -> {content_hash, transcript_text, caption, ...}\n"
-        "  3) search_videos(query) -> matching videos and timestamped moments\n"
-        "  4) get_video_context(content_hash, media_id?) -> evidence for an answer\n\n"
-        "Indexing is idempotent (content-hash addressed); re-calling index_video_from_url "
-        "with the same URL is a cheap cache hit."
+        "For Reel adaptation or remix requests, first call get_workflow('adapt-reel'). "
+        "For creator performance audits, first call get_workflow('performance-audit'). "
+        "Fetch the guide at the start of each new workflow execution, even in an existing chat, "
+        "then follow its instructions to completion within the user's request. "
+        "All tools operate on the one creator configured by the server.\n\n"
+        "Use get_current_creator_profile for personalized advice; simple data lookups do not "
+        "require a workflow or profile call. Artifact content_hash is run_prompt's artifact_hash; "
+        "dashboard media_id is a separate identifier. Search results link them. "
+        "index_video_from_url indexes source bytes; run_prompt performs video-model analysis. "
+        "Analytics and retrieval tools read stored evidence."
     ),
     host="0.0.0.0",
     port=8002,
@@ -244,6 +246,22 @@ def _trim_artifact(artifact: dict) -> dict:
         "comments": md.get("comments") or [],
         "indexed_at": indexed_at.isoformat() if hasattr(indexed_at, "isoformat") else indexed_at,
     }
+
+
+@mcp.tool(
+    title="Get creator workflow",
+    annotations=READ_ONLY_ANNOTATIONS,
+    meta=TOOL_SECURITY_META,
+    structured_output=True,
+)
+def get_workflow(name: WorkflowName) -> WorkflowOutput:
+    """Fetch current instructions before starting a Reel adaptation or performance audit.
+
+    Use `adapt-reel` to adapt/remix a source Reel to the creator's niche, or
+    `performance-audit` to review the creator's results. Returns the guide and
+    its content-derived version. Reads the latest server file on each call.
+    """
+    return load_workflow(name)
 
 
 @mcp.tool(
@@ -414,8 +432,8 @@ def get_current_creator_profile(days: int = 60) -> CreatorProfileOutput:
     """Read the current evidence-first creator profile from the analytics dashboard.
 
     This read-only tool returns the dashboard's bounded profile of the connected
-    creator. Call it first in every creator-specific workflow; the dashboard
-    authoritatively enforces its 30–60 day window.
+    creator for personalized advice. The dashboard authoritatively enforces
+    its 30–60 day window.
     """
     return _dashboard_client().get_current_creator_profile(days)
 

@@ -1,6 +1,6 @@
 {
   "name": "instagram-creator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Single-creator Instagram analytics and Reel workflow skills",
   "author": {
     "name": "inst-ai-bot"
@@ -14,7 +14,7 @@
     "category": "Productivity",
     "capabilities": ["Read", "Write"],
     "defaultPrompt": [
-      "Summarize my creator profile from the last 60 days.",
+      "Audit my Instagram performance over the last 30 days.",
       "Adapt this Instagram Reel for my creator profile.",
       "Grill this Instagram Reel and tell me what to improve."
     ]
