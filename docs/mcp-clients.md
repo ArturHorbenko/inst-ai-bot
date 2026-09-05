@@ -82,8 +82,8 @@ claude mcp add inst-ai-bot \
   --header "Authorization: Bearer <secret>"
 ```
 
-Install the skills by copying or linking `skills/adapt-reel` and
-`skills/grill-reel` into the Claude skills directory.
+Install the skills by copying or linking `skills/adapt-reel`,
+`skills/performance-audit`, and `skills/grill-reel` into the Claude skills directory.
 
 ### Claude Desktop local MCP configuration
 
@@ -130,7 +130,10 @@ enough for hosted ChatGPT or Claude.
    Registration.
 4. Select Connect. At the `Authorize MCP access` page, enter the owner password
    from `secrets/oauth-owner-password.txt` and select Approve.
-5. Confirm all nine tools are discovered.
+5. Confirm all ten tools are discovered, including `get_workflow`. The server
+   instructions route adaptation and performance audit requests to that tool;
+   connecting the MCP URL is sufficient to fetch those guides. Continue below
+   only if you also want the packaged skill entry points.
 6. Copy the connection's technical ID from the browser URL. It starts with
    `plugin_asdk_app`.
 7. Add `.app.json` to the repo-local `instagram-creator` plugin with that real
@@ -150,7 +153,7 @@ configuration and use the repo skills without an app binding.
 2. Enter the public `/mcp` URL. Provide a pre-registered OAuth client ID and
    secret in Advanced settings only if the OAuth provider requires them.
 3. Connect and authorize, then enable the connector for the conversation.
-4. Upload the two archives produced by `./skills/package.sh --all` when the
+4. Upload the skill archives produced by `./skills/package.sh --all` when the
    guided workflows are wanted.
 
 Claude's remote connection originates from Anthropic infrastructure, including
@@ -198,8 +201,27 @@ Run these in every connected client:
 6. Supply an invalid Instagram URL and confirm the error is understandable.
 7. Ask an unrelated question and confirm the MCP is not called.
 
-Confirm that creator-specific workflows call `get_current_creator_profile`
-first and that every client returns data for the same configured creator.
+Also test “Adapt this Reel to my niche: <Instagram Reel URL>” and “Audit my
+Instagram performance.” Confirm the first tool is `get_workflow` with
+`adapt-reel` or `performance-audit`, respectively, followed by the guide's
+profile and evidence calls. Repeat a new audit in the same chat and confirm it
+fetches the guide again. Simple data lookups should call their tools directly.
+Every client must return data for the same configured creator.
+
+### Workflow deployment
+
+For the first `get_workflow` rollout, deploy the MCP code and
+`video_processor/workflows/` directory together, restart the MCP service, and
+refresh the ChatGPT connection's tools and instructions. Test in a new chat.
+Existing plugin installations need the updated entry points once; a bare
+ChatGPT connector needs no plugin upload.
+
+For later edits to an existing guide, deploy just the Markdown file to the
+server's checkout (prefer an atomic file replacement). `get_workflow` reads it
+on each call, with a content-derived `version`; no service restart or connection
+refresh is needed. Already-running workflows retain the guide they fetched.
+Adding workflow names or changing the tool schema/routing requires a code
+deployment, restart, and connection refresh. See `skills/README.md` for packaging.
 
 ## References
 

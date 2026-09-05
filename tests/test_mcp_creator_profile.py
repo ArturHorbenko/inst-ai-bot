@@ -30,9 +30,10 @@ def test_get_current_creator_profile_delegates_days_to_dashboard_client(monkeypa
     dashboard_client.get_current_creator_profile.assert_called_once_with(45)
 
 
-def test_creator_workflows_must_read_profile_before_other_work():
+def test_creator_workflows_load_guides_and_simple_lookups_remain_direct():
     instructions = mcp_server.mcp.instructions.lower()
 
-    assert "every creator-specific workflow" in instructions
+    assert "get_workflow('adapt-reel')" in instructions[:512]
+    assert "get_workflow('performance-audit')" in instructions[:512]
     assert "get_current_creator_profile" in instructions
-    assert "before retrieval, indexing, or run_prompt" in instructions
+    assert "simple data lookups do not require a workflow or profile call" in instructions
