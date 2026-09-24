@@ -1,7 +1,10 @@
 """Read-only client for the Instagram analytics dashboard's MCP data surface."""
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
+
+ContentTypeFilter = Literal["all", "reels", "posts"]
+CommercialContextFilter = Literal["organic", "sponsored_partner", "unclear"]
 
 
 class DashboardAnalyticsClient:
@@ -32,8 +35,22 @@ class DashboardAnalyticsClient:
             raise RuntimeError(payload.get("error") or f"Dashboard analytics HTTP {response.status_code}")
         return payload
 
-    def list_recent_content(self, limit: int = 10) -> list[dict]:
-        return self._get("/api/internal/mcp/content", {"limit": limit})["content"]
+    def list_recent_content(
+        self,
+        limit: int = 10,
+        *,
+        content_type: ContentTypeFilter = "all",
+        commercial_context: Optional[CommercialContextFilter] = None,
+        page: int = 1,
+    ) -> list[dict]:
+        params = {"limit": limit}
+        if content_type != "all":
+            params["contentType"] = content_type
+        if commercial_context is not None:
+            params["commercialContext"] = commercial_context
+        if page != 1:
+            params["page"] = page
+        return self._get("/api/internal/mcp/content", params)["content"]
 
     def get_content_analytics(self, media_id: str, days: int = 30) -> dict:
         return self._get("/api/internal/mcp/content", {"mediaId": media_id, "days": days})["content"]

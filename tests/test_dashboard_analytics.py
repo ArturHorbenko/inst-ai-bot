@@ -21,6 +21,21 @@ class DashboardAnalyticsClientTest(unittest.TestCase):
         self.assertEqual(calls[0][1]["headers"], {"X-MCP-Read-Secret": "read-secret"})
         self.assertEqual(calls[0][1]["params"], {"limit": 5})
 
+    def test_passes_sponsored_reel_filters_and_page(self):
+        def transport(url, **kwargs):
+            self.assertEqual(url, "https://dashboard.example/api/internal/mcp/content")
+            self.assertEqual(kwargs["params"], {
+                "limit": 25, "contentType": "reels",
+                "commercialContext": "sponsored_partner", "page": 2,
+            })
+            return SimpleNamespace(is_success=True, json=lambda: {"ok": True, "content": []})
+
+        result = DashboardAnalyticsClient("https://dashboard.example", "secret", transport=transport).list_recent_content(
+            25, content_type="reels", commercial_context="sponsored_partner", page=2,
+        )
+        self.assertEqual(result, [])
+
+
     def test_rejects_missing_dashboard_configuration(self):
         with self.assertRaisesRegex(RuntimeError, "not configured"):
             DashboardAnalyticsClient(None, None).get_content_analytics("reel-1")

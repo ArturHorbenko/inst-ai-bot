@@ -20,17 +20,17 @@ Mirrors the FastAPI routes in server.py but is callable by MCP clients
 import logging
 import os
 import secrets
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .config import get_config
-from .dashboard_analytics import DashboardAnalyticsClient
+from .dashboard_analytics import CommercialContextFilter, ContentTypeFilter, DashboardAnalyticsClient
 from .indexer import index_video
 from .mcp_auth import build_oauth_runtime
 from .retrieval import (
@@ -444,15 +444,32 @@ def get_current_creator_profile(days: int = 60) -> CreatorProfileOutput:
     meta=TOOL_SECURITY_META,
     structured_output=True,
 )
-def list_recent_content(limit: int = 10) -> list[ContentAnalyticsOutput]:
-    """Read up to 25 recent Reels and Feed posts from stored analytics data.
+def list_recent_content(
+    limit: Annotated[int, Field(ge=1, le=25)] = 10,
+    content_type: ContentTypeFilter = "all",
+    commercial_context: Optional[CommercialContextFilter] = None,
+    page: Annotated[int, Field(ge=1, le=1_000_000)] = 1,
+) -> list[ContentAnalyticsOutput]:
+    """Read a page of up to 25 Reels and Feed posts from stored analytics data.
+
+    For sponsored Reels use content_type="reels" and
+    commercial_context="sponsored_partner". Filters apply before pagination.
+    Commercial context is the preferred stored AI taxonomy classification, not
+    a verified Instagram paid-partnership flag; unclassified content is excluded
+    when filtering. Omit commercial_context to include all classifications.
+    Results sort newest first, with media ID breaking timestamp ties. Start at
+    page=1 and increment with the same limit/filters until a short or empty page.
+    Pages are not a snapshot: newly synced content can shift later pages.
 
     Results include the latest Meta observation, calculated day-over-day view
     growth when two snapshots exist, and the newest validated trait extraction.
-    Trial Reels are excluded; other Reels and Feed posts are included. This tool
+    Unpromoted Trial Reels are excluded; promoted trials, other Reels and Feed
+    posts are included. This tool
     is read-only: it never calls Meta or starts a model Run.
     """
-    return _dashboard_client().list_recent_content(limit)
+    return _dashboard_client().list_recent_content(
+        limit, content_type=content_type, commercial_context=commercial_context, page=page,
+    )
 
 
 @mcp.tool(

@@ -5,6 +5,38 @@ The creator is selected by the server's existing configuration; there is no
 creator ID, tenant ID, or account selector in MCP requests. Every authorized
 client sees the same creator, analytics, indexed videos, and prompt runs.
 
+## Filter and paginate stored content
+
+Use `list_recent_content` to retrieve only sponsored Reels:
+
+```json
+{
+  "limit": 25,
+  "content_type": "reels",
+  "commercial_context": "sponsored_partner",
+  "page": 1
+}
+```
+
+`content_type` accepts `all` (default), `reels`, or `posts` (Feed posts).
+`commercial_context` accepts `organic`, `sponsored_partner`, or `unclear`;
+omit it to include all content, including unclassified records. Sponsorship
+is a stored AI taxonomy classification, not a verified paid-partnership flag.
+Missing or invalid taxonomy does not match a commercial filter, except that
+manual taxonomy without an AI classification retains the dashboard's `unclear`
+fallback. Unpromoted Trial Reels remain excluded; archived content is included.
+
+Filters apply before pagination. Results retain the existing list shape and
+sort by posting date descending, then media ID ascending. Keep the limit and
+filters fixed and increment `page` until a short or empty page. `limit` is
+1–25 (default 10); `page` is 1–1000000 (default 1). Newly synced content or
+updated classifications can shift pages between requests.
+
+The dashboard counterpart is `GET /api/internal/mcp/content` with `limit`,
+`contentType`, `commercialContext`, and `page` query parameters. Deploy the
+dashboard changes before restarting the MCP server, then refresh the client's
+tool list. The legacy `/api/internal/mcp/reels` endpoint is unchanged.
+
 ## 1. Server authentication
 
 Set these values in the server `.env`. Restart `inst-ai-bot-mcp.service`; when

@@ -34,7 +34,7 @@ EXPECTED_TOOL_PARAMETERS = {
     "search_videos": {"query", "limit", "trait_schema", "prompt_version"},
     "get_video_context": {"content_hash", "media_id", "trait_schema", "prompt_version"},
     "get_current_creator_profile": {"days"},
-    "list_recent_content": {"limit"},
+    "list_recent_content": {"limit", "content_type", "commercial_context", "page"},
     "get_content_analytics": {"media_id", "days"},
     "content_audit": {"days"},
 }
@@ -108,6 +108,42 @@ def test_workflow_names_are_discoverable_in_tool_schema():
     tool = next(tool for tool in tools if tool.name == "get_workflow")
 
     assert tool.inputSchema["properties"]["name"]["enum"] == list(workflow_guides.WORKFLOW_FILES)
+
+
+def test_content_filters_are_discoverable_and_forwarded(monkeypatch):
+    from unittest.mock import Mock
+
+    client = Mock()
+    client.list_recent_content.return_value = []
+    monkeypatch.setattr(mcp_server, "_dashboard_client", lambda: client)
+    tools = asyncio.run(mcp_server.mcp.list_tools())
+    tool = next(tool for tool in tools if tool.name == "list_recent_content")
+    properties = tool.inputSchema["properties"]
+    assert properties["content_type"]["enum"] == ["all", "reels", "posts"]
+    assert properties["commercial_context"]["anyOf"][0]["enum"] == ["organic", "sponsored_partner", "unclear"]
+    assert properties["page"]["minimum"] == 1
+    assert properties["limit"]["maximum"] == 25
+
+    asyncio.run(mcp_server.mcp.call_tool("list_recent_content", {
+        "limit": 25, "content_type": "reels", "commercial_context": "sponsored_partner", "page": 2,
+    }))
+    client.list_recent_content.assert_called_once_with(
+        25, content_type="reels", commercial_context="sponsored_partner", page=2,
+    )
+
+
+@pytest.mark.parametrize("arguments", [
+    {"content_type": "video"}, {"commercial_context": "sponsored"},
+    {"page": 0}, {"page": 1_000_001}, {"limit": 26},
+])
+def test_content_filters_reject_invalid_inputs_before_dashboard_read(monkeypatch, arguments):
+    from unittest.mock import Mock
+
+    client = Mock()
+    monkeypatch.setattr(mcp_server, "_dashboard_client", client)
+    with pytest.raises(Exception, match="validation error"):
+        asyncio.run(mcp_server.mcp.call_tool("list_recent_content", arguments))
+    client.assert_not_called()
 
 
 @pytest.mark.parametrize("name", workflow_guides.WORKFLOW_FILES)
